@@ -1,9 +1,26 @@
 //
-//  main.c
-//  bb_h263
+// bb_h263
+// Written by Larry Bank (bitbank@pobox.com)
+// Project started 3/22/2026
 //
-//  Created by Laurence Bank on 01/06/2025.
+// SPDX-FileCopyrightText: 2026 BitBank Software, Inc.
+// SPDX-License-Identifier: GPL-3.0-or-later
 //
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <http://www.gnu.org/licenses/>.
+//
+#ifndef __BB_H263__
+#define __BB_H263__
 
 #include <stdio.h>
 #include <stdint.h>
@@ -25,21 +42,61 @@
 enum {
     H263_SUCCESS = 0,
     H263_DECODE_ERROR,
+    H263_FILEIO_ERROR,
     H263_INVALID_PARAMETER,
+    H263_INVALID_FILE,
 };
+
+enum {
+    H263_PIXEL_RGB565_LE = 0,
+    H263_PIXEL_RGB565_BE
+};
+
+typedef struct H263_file_tag
+{
+  int32_t iPos; // current file position
+  int32_t iSize; // file size
+  uint8_t *pData; // memory file pointer
+  void * fHandle; // class pointer to File/SdFat or whatever you want
+} H263FILE;
+
+typedef struct H263_draw_tag
+{
+    int x, y; // upper left corner of this block
+    int iPitch; // bytes per row (not pixels)
+    int iWidth, iHeight; // size of this pixel block
+    uint16_t *pPixels; // 16-bit pixels
+    void *pUser;
+} H263DRAW;
+
+// Callback function prototypes
+typedef int32_t (H263_READ_CALLBACK)(H263FILE *pFile, uint8_t *pBuf, int32_t iLen);
+typedef int32_t (H263_SEEK_CALLBACK)(H263FILE *pFile, int32_t iPosition);
+typedef void (H263_DRAW_CALLBACK)(H263DRAW *pDraw);
+typedef void * (H263_OPEN_CALLBACK)(const char *szFilename, uint32_t *pFileSize);
+typedef void (H263_CLOSE_CALLBACK)(void *pHandle);
 
 typedef struct tagvideo {
     int iWidth;
     int iHeight;
+    int iXOffset, iYOffset; // placement on the display
+    H263_READ_CALLBACK *pfnRead;
+    H263_SEEK_CALLBACK *pfnSeek;
+    H263_DRAW_CALLBACK *pfnDraw;
+    H263_CLOSE_CALLBACK *pfnClose;
+    H263FILE H263File;
+    void *pUser;
     int iFrameCX; // width in whole macroblocks (multiple of 16)
     int iFrameCY; // height in whole macroblocks (multiple of 16)
     int iStreamOff; // current offset in the file
-    void * iFile; // Current file handle
+    uint8_t *pStream; // pointer to memory block data source
     int iFileOff; // offset into the already-read data
     int iFileLen; // length of data currently in the file buf
     int iFileHighWater; // high water mark for data in the file buffer
     int iOptions; // conversion options
     int iDCY, iDCCb, iDCCr; // DC predictors
+    int iFramePitch;
+    uint8_t *pFramebuffer;
     uint8_t *pFileBuf; // 32k for working with file data
     uint8_t *pVideo; // compressed video buffer
     uint8_t *pAudio; // compressed audio buffer
@@ -59,19 +116,161 @@ typedef struct tagvideo {
     int iCurrentFrame;
     int iLastError;
     int bPacketized; // indicates if the data stream is in packets or is raw video (single stream)
+    int iFrameTotal;
+    uint32_t iFrameDelay;
     int16_t MCUs[6*DCTSIZE2];
     uint8_t ucIntraQuant[64];
     uint8_t ucNonIntraQuant[64];
+    uint8_t cRangeTable2[1024]; // clipping table
     int8_t cMVPredX[128]; // current and previous motion vector predictors
     int8_t cMVPredY[128]; // needed for h.263
-    uint8_t ucPelAspect, cQuantizerScale;
-    uint16_t usYUVRGB[65536]; // lookup table for colorspace conversion
-} VIDEO;
+    uint8_t ucPelAspect, cQuantizerScale, u8PixelType;
+    uint16_t *usYUVRGB; // lookup table for colorspace conversion
+} H263STATE;
 
 // Forward declarations
-int GetH263MCU(uint32_t *pTable, uint8_t *buf, int16_t *pMCU, int *iOffset, int *iBitnum, VIDEO *pVideo, int iQuant, int bTCOEF, uint8_t ucMBType);
-void H263MotCompAVG(int x, int y, signed int *pMVs, signed short *pMCUDest, VIDEO *pVideo);
-void H263MotComp(int x, int y, signed int iMV_X, signed int iMV_Y, signed short *pMCUDest, VIDEO *pVideo, int bBackward);
+int GetH263MCU(uint32_t *pTable, uint8_t *buf, int16_t *pMCU, int *iOffset, int *iBitnum, H263STATE *pVideo, int iQuant, int bTCOEF, uint8_t ucMBType);
+void H263MotCompAVG(int x, int y, signed int *pMVs, signed short *pMCUDest, H263STATE *pVideo);
+void H263MotComp(int x, int y, signed int iMV_X, signed int iMV_Y, signed short *pMCUDest, H263STATE *pVideo, int bBackward);
+void H263Close(H263STATE *pState);
+int ReadH263(H263STATE *pVideo);
+
+#ifdef __LINUX__
+
+#endif // __LINUX__
+static void * linuxOpen(const char *filename, uint32_t *size) {
+    static FILE *myfile;
+    size_t len;
+    printf("Attempting to open %s\n", filename);
+    myfile = fopen(filename, "r+b");
+    if (myfile) {
+        fseek(myfile, 0, SEEK_END);
+        len = ftell(myfile);
+        *size = (uint32_t)len;
+        fseek(myfile, 0, SEEK_SET);
+        return myfile;
+    }
+  return NULL;
+} /* linuxOpen() */
+
+static void linuxClose(void *handle) {
+  FILE *pFile = (FILE *)handle;
+  if (pFile) fclose(pFile);
+} /* linuxClose() */
+
+static int32_t linuxRead(H263FILE *handle, uint8_t *buffer, int32_t length) {
+    FILE *pFile = (FILE *)handle->fHandle;
+    int32_t len;
+    if (!pFile) return 0;
+    len = (int32_t)fread(buffer, 1, length, pFile);
+    handle->iPos += len;
+    return len;
+}
+
+static int32_t linuxSeek(H263FILE *handle, int32_t position) {
+    FILE *pFile = (FILE *)handle->fHandle;
+    if (!pFile) return 0;
+    fseek(pFile, position, SEEK_SET);
+    handle->iPos = (int32_t)ftell(pFile);
+    return handle->iPos;
+}
+#ifdef __cplusplus
+//
+// The BB_H263 class wraps portable C code which does the actual work
+//
+class BB_H263
+{
+    
+  public:
+    BB_H263() {memset(&_h263, 0, sizeof(_h263));}
+    int decodeFrame(int x, int y);
+    int open(const uint8_t *pData, int iDataSize, H263_DRAW_CALLBACK *pDraw);
+    int open(const char *szFilename, H263_OPEN_CALLBACK *pfnOpen, H263_CLOSE_CALLBACK *pfnClose, H263_READ_CALLBACK *pfnRead, H263_SEEK_CALLBACK *pfnSeek, H263_DRAW_CALLBACK *pfnDraw);
+#ifdef __LINUX__
+    int open(const char *szFilename, H263_DRAW_CALLBACK *pfnDraw);
+#endif
+    void setFramebuffer(uint8_t *pFramebuffer, int iPitch) { _h263.pFramebuffer = pFramebuffer; _h263.iFramePitch = iPitch;}
+    void close() {H263Close(&_h263);}
+    int getWidth() {return _h263.iWidth;}
+    int getHeight() {return _h263.iHeight;}
+    int getFrameCount() {return _h263.iFrameTotal;}
+    uint32_t getFrameDelay() {return _h263.iFrameDelay;}
+    void setUserPointer(void *p) { _h263.pUser = p;}
+    void setPixelType(uint8_t u8Type) { _h263.u8PixelType = u8Type;} // defaults to little endian
+    uint8_t getPixelType() {return _h263.u8PixelType;}
+
+  private:
+    H263STATE _h263;
+}; // class H263
+
+// Class implementation
+int BB_H263::open(const uint8_t *pData, int iDataSize, H263_DRAW_CALLBACK *pDraw)
+{
+    _h263.pStream = (uint8_t *)pData;
+    _h263.H263File.iSize = iDataSize;
+    _h263.pfnDraw = pDraw;
+    return H263_SUCCESS;
+} /* open() */
+
+int BB_H263::open(const char *szFilename, H263_DRAW_CALLBACK *pfnDraw)
+{
+    FILE *pFile;
+    uint32_t iDataSize;
+    
+    if (!pfnDraw || !szFilename) return H263_INVALID_PARAMETER;
+    
+    memset(&_h263, 0, sizeof(H263STATE));
+    _h263.pfnDraw = pfnDraw;
+    _h263.pfnRead = linuxRead;
+    _h263.pfnSeek = linuxSeek;
+    _h263.pfnClose = linuxClose;
+    pFile = (FILE *)linuxOpen(szFilename, &iDataSize);
+    if (!pFile) return H263_FILEIO_ERROR;
+    if (iDataSize < 4096) {
+        linuxClose(pFile);
+        return H263_INVALID_FILE;
+    }
+    _h263.H263File.fHandle = pFile;
+    _h263.H263File.iPos = 0; // current file position
+    _h263.H263File.iSize = iDataSize; // file size
+    return H263_SUCCESS;
+} /* open() */
+
+int BB_H263::open(const char *szFilename, H263_OPEN_CALLBACK *pfnOpen, H263_CLOSE_CALLBACK *pfnClose, H263_READ_CALLBACK *pfnRead, H263_SEEK_CALLBACK *pfnSeek, H263_DRAW_CALLBACK *pfnDraw)
+{
+    FILE *pFile;
+    uint32_t iDataSize;
+    
+    if (!pfnOpen || !pfnClose || !pfnRead || !pfnSeek) return H263_INVALID_PARAMETER;
+    memset(&_h263, 0, sizeof(H263STATE));
+    _h263.pfnDraw = pfnDraw;
+    _h263.pfnRead = pfnRead;
+    _h263.pfnSeek = pfnSeek;
+    _h263.pfnClose = pfnClose;
+    pFile = (FILE *)(*pfnOpen)(szFilename, &iDataSize);
+    if (!pFile) return H263_FILEIO_ERROR;
+    if (iDataSize < 4096) {
+        (*pfnClose)(pFile);
+        return H263_INVALID_FILE;
+    }
+    _h263.H263File.fHandle = pFile;
+    _h263.H263File.iPos = 0; // current file position
+    _h263.H263File.iSize = iDataSize; // file size
+    return H263_SUCCESS;
+} /* open() */
+
+int BB_H263::decodeFrame(int x, int y)
+{
+    return ReadH263(&_h263);
+//    return H263_decodeFrame(&_h263, x, y);
+} /* decodeFrame() */
+
+#endif // __cplusplus
+
+void H263Close(H263STATE *pVideo)
+{
+    (*pVideo->pfnClose)(pVideo->H263File.fHandle);
+} /* H263Close() */
 
 const uint8_t cZigZag2[64] = {0,1,8,16,9,2,3,10,
     17,24,32,25,18,11,4,5,
@@ -712,9 +911,8 @@ int i;
  *  PURPOSE    : Combine and output a subsampled color macro block.         *
  *                                                                          *
  ****************************************************************************/
-void H263PutMCU22(VIDEO *pVideo, int x, int y, int lsize, short *pMCU, uint8_t *cOutput, int iYBias, int iCrCbBias)
+void H263PutMCU22(H263STATE *pVideo, int x, int y, short *pMCU, int iYBias, int iCrCbBias)
 {
-#ifdef FUTURE
 //signed long Cr,Cb;
 int32_t Y1, Y2, Y3, Y4;
 int iRow, iCol;
@@ -724,23 +922,24 @@ int32_t iCBG, iCRG, iCBB, iCRR;
 const int iRowOffsets[8] = {0,16,32,48,128,144,160,176};
 int iMaxCol, iMaxRow;
 uint16_t usIndex;
-
-    if (pJPEG->iOptions & PIL_CONVERT_16BPP)
-       lsize >>= 2; // for longs
-   ulDest = (uint32_t *)cOutput;
+uint8_t *cOutput;
+int iPitch = pVideo->iFramePitch;
+    
+//    if (pVideo->iOptions & PIL_CONVERT_16BPP)
+//       lsize >>= 2; // for longs
 
    pCb = (int16_t *)&pMCU[MCU4];
    pCr = (int16_t *)&pMCU[MCU5];
 
    /* Convert YCC pixels into RGB pixels and store in output image */
-   ulDest += y*16*lsize + x*8; // destination 16x16 block of output image
-   cOutput += y*16*lsize + x*16*3;
+   ulDest = (uint32_t *)&pVideo->pFramebuffer[y*16*iPitch + x*8]; // destination 16x16 block of output image
+   cOutput = &pVideo->pFramebuffer[y*16*iPitch + x*16*3];
    // Set the block clipping size so we don't draw beyond the image borders
    iMaxRow = iMaxCol = 7;
-   if ((y+1)*16 > inpage->iHeight)
-      iMaxRow = (inpage->iHeight/2) & 7;
-   if ((x+1)*16 > inpage->iWidth)
-      iMaxCol = (inpage->iWidth/2) & 7;
+   if ((y+1)*16 > pVideo->iHeight)
+      iMaxRow = (pVideo->iHeight/2) & 7;
+   if ((x+1)*16 > pVideo->iWidth)
+      iMaxCol = (pVideo->iWidth/2) & 7;
    for (iRow=0; iRow <= iMaxRow; iRow++)
       {
       pY = (signed short *)&pMCU[MCU0 + iRowOffsets[iRow]];
@@ -758,7 +957,7 @@ uint16_t usIndex;
 //            iCBG = 25675 * Cb;
 //            iCRG = 53279 * Cr;
 //            iCRR = 104597  * Cr;
-            if (pJPEG->iOptions & PIL_CONVERT_16BPP)
+            if (1) //pVideo->iOptions & PIL_CONVERT_16BPP)
                {  // Render 4 pixels from 4 Ys and 1 Cb,Cr
                s = pY[0];
                if (s > 255) s = 255;
@@ -779,13 +978,13 @@ uint16_t usIndex;
                if (s < 0) s = 0;
                usIndex |= (((s)>>2) & 0x3f); // Y2
                ulPixel |= (pVideo->usYUVRGB[usIndex] << 16);
-//               ulPixel = pJPEG->usRangeTableB[((iCBB + Y2) >> 16) & 0x3ff]; // blue pixel
-//               ulPixel |= pJPEG->usRangeTableG[((Y2 - iCBG - iCRG) >> 16) & 0x3ff]; // green pixel
-//               ulPixel |= pJPEG->usRangeTableR[((iCRR + Y2) >> 16) & 0x3ff]; // red pixel
+//               ulPixel = pVideo->usRangeTableB[((iCBB + Y2) >> 16) & 0x3ff]; // blue pixel
+//               ulPixel |= pVideo->usRangeTableG[((Y2 - iCBG - iCRG) >> 16) & 0x3ff]; // green pixel
+//               ulPixel |= pVideo->usRangeTableR[((iCRR + Y2) >> 16) & 0x3ff]; // red pixel
 //               ulPixel <<= 16;
-//               ulPixel |= pJPEG->usRangeTableB[((iCBB + Y1) >> 16) & 0x3ff]; // blue pixel
-//               ulPixel |= pJPEG->usRangeTableG[((Y1 - iCBG - iCRG) >> 16) & 0x3ff]; // green pixel
-//               ulPixel |= pJPEG->usRangeTableR[((iCRR + Y1) >> 16) & 0x3ff]; // red pixel
+//               ulPixel |= pVideo->usRangeTableB[((iCBB + Y1) >> 16) & 0x3ff]; // blue pixel
+//               ulPixel |= pVideo->usRangeTableG[((Y1 - iCBG - iCRG) >> 16) & 0x3ff]; // green pixel
+//               ulPixel |= pVideo->usRangeTableR[((iCRR + Y1) >> 16) & 0x3ff]; // red pixel
                ulDest[0] = ulPixel;
                usIndex &= ~0x3f; // blast away Y2
                s = pY[8];
@@ -799,14 +998,14 @@ uint16_t usIndex;
                if (s < 0) s = 0;
                usIndex |= (((s)>>2) & 0x3f); // Y4
                ulPixel |= (pVideo->usYUVRGB[usIndex] << 16);
-//               ulPixel = pJPEG->usRangeTableB[((iCBB + Y4) >> 16) & 0x3ff]; // blue pixel
-//               ulPixel |= pJPEG->usRangeTableG[((Y4 - iCBG - iCRG) >> 16) & 0x3ff]; // green pixel
-//               ulPixel |= pJPEG->usRangeTableR[((iCRR + Y4) >> 16) & 0x3ff]; // red pixel
+//               ulPixel = pVideo->usRangeTableB[((iCBB + Y4) >> 16) & 0x3ff]; // blue pixel
+//               ulPixel |= pVideo->usRangeTableG[((Y4 - iCBG - iCRG) >> 16) & 0x3ff]; // green pixel
+//               ulPixel |= pVideo->usRangeTableR[((iCRR + Y4) >> 16) & 0x3ff]; // red pixel
 //               ulPixel <<= 16;
-//               ulPixel |= pJPEG->usRangeTableB[((iCBB + Y3) >> 16) & 0x3ff]; // blue pixel
-//               ulPixel |= pJPEG->usRangeTableG[((Y3 - iCBG - iCRG) >> 16) & 0x3ff]; // green pixel
-//               ulPixel |= pJPEG->usRangeTableR[((iCRR + Y3) >> 16) & 0x3ff]; // red pixel
-               ulDest[lsize] = ulPixel;
+//               ulPixel |= pVideo->usRangeTableB[((iCBB + Y3) >> 16) & 0x3ff]; // blue pixel
+//               ulPixel |= pVideo->usRangeTableG[((Y3 - iCBG - iCRG) >> 16) & 0x3ff]; // green pixel
+//               ulPixel |= pVideo->usRangeTableR[((iCRR + Y3) >> 16) & 0x3ff]; // red pixel
+               ulDest[iPitch] = ulPixel;
                }
             else
                {
@@ -821,18 +1020,18 @@ uint16_t usIndex;
                iCBG = 25675 * Cb;
                iCRG = 53279 * Cr;
                iCRR = 104597  * Cr;
-               cOutput[0] = pJPEG->cRangeTable2[((iCBB + Y1) >> 16) & 0x3ff]; // blue pixel
-               cOutput[1] = pJPEG->cRangeTable2[((Y1 - iCBG - iCRG ) >> 16) & 0x3ff]; // green pixel
-               cOutput[2] = pJPEG->cRangeTable2[((iCRR + Y1) >> 16) & 0x3ff]; // red pixel
-               cOutput[lsize] = pJPEG->cRangeTable2[((iCBB + Y3) >> 16) & 0x3ff]; // blue pixel
-               cOutput[lsize+1] = pJPEG->cRangeTable2[((Y3 - iCBG - iCRG) >> 16) & 0x3ff]; // green pixel
-               cOutput[lsize+2] = pJPEG->cRangeTable2[((iCRR + Y3) >> 16) & 0x3ff]; // red pixel
-               cOutput[3] = pJPEG->cRangeTable2[((iCBB + Y2) >> 16) & 0x3ff]; // blue pixel
-               cOutput[4] = pJPEG->cRangeTable2[((Y2 - iCBG - iCRG) >> 16) & 0x3ff]; // green pixel
-               cOutput[5] = pJPEG->cRangeTable2[((iCRR + Y2) >> 16) & 0x3ff]; // red pixel
-               cOutput[lsize+3] = pJPEG->cRangeTable2[((iCBB + Y4) >> 16) & 0x3ff]; // blue pixel
-               cOutput[lsize+4] = pJPEG->cRangeTable2[((Y4 - iCBG - iCRG) >> 16) & 0x3ff]; // green pixel
-               cOutput[lsize+5] = pJPEG->cRangeTable2[((iCRR + Y4) >> 16) & 0x3ff]; // red pixel
+               cOutput[0] = pVideo->cRangeTable2[((iCBB + Y1) >> 16) & 0x3ff]; // blue pixel
+               cOutput[1] = pVideo->cRangeTable2[((Y1 - iCBG - iCRG ) >> 16) & 0x3ff]; // green pixel
+               cOutput[2] = pVideo->cRangeTable2[((iCRR + Y1) >> 16) & 0x3ff]; // red pixel
+               cOutput[iPitch] = pVideo->cRangeTable2[((iCBB + Y3) >> 16) & 0x3ff]; // blue pixel
+               cOutput[iPitch+1] = pVideo->cRangeTable2[((Y3 - iCBG - iCRG) >> 16) & 0x3ff]; // green pixel
+               cOutput[iPitch+2] = pVideo->cRangeTable2[((iCRR + Y3) >> 16) & 0x3ff]; // red pixel
+               cOutput[3] = pVideo->cRangeTable2[((iCBB + Y2) >> 16) & 0x3ff]; // blue pixel
+               cOutput[4] = pVideo->cRangeTable2[((Y2 - iCBG - iCRG) >> 16) & 0x3ff]; // green pixel
+               cOutput[5] = pVideo->cRangeTable2[((iCRR + Y2) >> 16) & 0x3ff]; // red pixel
+               cOutput[iPitch+3] = pVideo->cRangeTable2[((iCBB + Y4) >> 16) & 0x3ff]; // blue pixel
+               cOutput[iPitch+4] = pVideo->cRangeTable2[((Y4 - iCBG - iCRG) >> 16) & 0x3ff]; // green pixel
+               cOutput[iPitch+5] = pVideo->cRangeTable2[((iCRR + Y4) >> 16) & 0x3ff]; // red pixel
                }
             } // if not beyond edge
          pCb++;
@@ -844,11 +1043,10 @@ uint16_t usIndex;
          cOutput += 6;
          } // for each column
       ulDest -= 8;
-      ulDest += lsize*2; // next line of dest pixels
+      ulDest += iPitch*2; // next line of dest pixels
       cOutput -= 48;
-      cOutput += lsize*2;
+      cOutput += iPitch*2;
       } // for each row
-#endif // FUTURE
 } /* H263PutMCU22() */
 
 #define GETMOREBITS if (iBit >= 16) {iBit -= 16; ulBits <<= 16; ulBits |= MOTOSHORT(&buf[iOff]); iOff += 2;}
@@ -918,7 +1116,7 @@ signed char cTemp, cMV1, cMV2, cMV3; // the 3 candidate predictors
  *  PURPOSE    : Copy a MB to our prediction Luma/Chroma image.             *
  *                                                                          *
  ****************************************************************************/
-void H263CopyMB(VIDEO *pVideo, int x, int y, signed short *pMCU)
+void H263CopyMB(H263STATE *pVideo, int x, int y, signed short *pMCU)
 {
 uint32_t *pS, *pD;
 signed short *pDest;
@@ -976,13 +1174,14 @@ int i, cy;
       }
 } /* H263CopyMB() */
 
-void PrepVideoStruct(VIDEO *pVideo)
+void PrepVideoStruct(H263STATE *pVideo)
 {
 int i, j, iValue, iCount, iRun, iLevel, iBits, iLen;
 
    pVideo->pFileBuf = (uint8_t *) malloc(0x10000); // 64k should be enough
    pVideo->pAudio = (uint8_t *) malloc(0x10000); // 64k should be enough
    pVideo->pVideo = (uint8_t *) malloc(0x10000);
+   pVideo->usYUVRGB = (uint16_t *)malloc(0x20000);
    pVideo->iCurrentFrame = 0;
    pVideo->iFRefFrame = -1;
    // prepare the AC decode table
@@ -1054,9 +1253,9 @@ int i, j, iValue, iCount, iRun, iLevel, iBits, iLen;
               iPixel |= ((j >> 3) << 11); // upper 5 bits = red
               pVideo->usYUVRGB[i] = (unsigned short)iPixel;
               }
-        } /* PrepVideoStruct() */
+} /* PrepVideoStruct() */
 
-void H263SwapFrames(VIDEO *pVideo)
+void H263SwapFrames(H263STATE *pVideo)
 {
 signed short *pTemp;
 int i;
@@ -1070,17 +1269,16 @@ int i;
 
 /****************************************************************************
  *                                                                          *
- *  FUNCTION   : PILReadH263(PIL_PAGE *, PIL_PAGE *, int)                   *
+ *  FUNCTION   : ReadH263(PIL_PAGE *, PIL_PAGE *, int)                   *
  *                                                                          *
  *  PURPOSE    : Decompress H263 into a flat bitmap.                        *
  *                                                                          *
  ****************************************************************************/
-int PILReadH263(VIDEO *pVideo, const uint8_t *pData)
+int ReadH263(H263STATE *pVideo)
 {
-int i, x, y, iGOBy, lsize, iErr, iOff, iLen, iBit;
+int i, x, y, iGOBy, iErr, iOff, iLen, iBit;
 int iTrueWidth, iTrueHeight;
-uint8_t cMask, cQuant, *buf, *cOutput;
-uint16_t *usOutput;
+uint8_t cMask, cQuant, *buf;
 uint32_t ulBits, ulCode;
 uint8_t cLevel, ucTR, ucPSBI, ucCBPY, *pCBPY;
 int16_t *pMCU = pVideo->MCUs, us;
@@ -1196,7 +1394,7 @@ uint8_t *pTables;
    iMBCount = (pVideo->iWidth+15) / 16;
 
 // Decompress the current frame
-   buf = (uint8_t *)pData; // point to raw h.263 data
+   buf = &pVideo->pStream[pVideo->iStreamOff]; // point to raw h.263 data
    iOff = iBit = 0;  /* Pointer into data stream */
    ulBits = MOTOLONG(&buf[iOff]); // start out with 32-bits
    iOff += 4;
@@ -1417,7 +1615,7 @@ get_mcbpc:
          }
       H263CopyMB(pVideo, x, y, pMCU); // copy the MB to our prediction image
       if (x < iMBCount && y < iGOBCount) {
-            H263PutMCU22(pVideo, x, y, lsize, pMCU, cOutput, -16, -128); // lay down MCU in output image
+            H263PutMCU22(pVideo, x, y, pMCU, -16, -128); // lay down MCU in output image
          }
 h263next:
       pVideo->cMVPredX[x + 64] = (signed char)iMV_X; // store MV
@@ -1446,7 +1644,7 @@ h263z:
  *  PURPOSE    : Decode a MCU block for H263 data streams.                  *
  *                                                                          *
  ****************************************************************************/
-int GetH263MCU(uint32_t *pTable, uint8_t *buf, int16_t *pMCU, int *iOffset, int *iBitnum, VIDEO *pVideo, int iQuant, int bTCOEF, uint8_t ucMBType)
+int GetH263MCU(uint32_t *pTable, uint8_t *buf, int16_t *pMCU, int *iOffset, int *iBitnum, H263STATE *pVideo, int iQuant, int bTCOEF, uint8_t ucMBType)
 {
 int iBit = *iBitnum;
 int iOff = *iOffset;
@@ -1546,7 +1744,7 @@ int bLast;
  *  PURPOSE    : Apply bidirectional motion compensation to predicted MB.   *
  *                                                                          *
  ****************************************************************************/
-void H263MotCompAVG(int x, int y, signed int *pMVs, signed short *pMCUDest, VIDEO *pVideo)
+void H263MotCompAVG(int x, int y, signed int *pMVs, signed short *pMCUDest, H263STATE *pVideo)
 {
 signed short sF, sB, *pSF, *pSB, *pD;
 signed int i, dxF, dyF, dxB, dyB, cx, cy, iTypeF, iTypeB;
@@ -1686,7 +1884,7 @@ signed int lyF, lyB;
  *  PURPOSE    : Apply motion compensation to predicted MacroBlock.         *
  *                                                                          *
  ****************************************************************************/
-void H263MotComp(int x, int y, signed int iMV_X, signed int iMV_Y, signed short *pMCUDest, VIDEO *pVideo, int bBackward)
+void H263MotComp(int x, int y, signed int iMV_X, signed int iMV_Y, signed short *pMCUDest, H263STATE *pVideo, int bBackward)
 {
 signed short s, *pS, *pD;
 signed int i, dx, dy, cx, cy, iType;
@@ -2038,8 +2236,4 @@ int bCheckBorders;
 
 } /* H263MotComp() */
 
-int main(int argc, const char * argv[]) {
-    // insert code here...
-    printf("Hello, World!\n");
-    return 0;
-}
+#endif // __BB_H263__
