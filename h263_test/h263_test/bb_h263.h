@@ -128,6 +128,7 @@ typedef struct tagvideo {
     int iVideoLen; // bytes of video data available
     int iVideoOff; // current offset in video data
     uint32_t iMovie; // offset to movie data
+    uint32_t iCurrentOffset; // offset to current frame when there is no index table
     int iVideoHighWater; // high water mark for reading more data
     int iAudioFreq;
     int iAudioLen; // bytes of audio data available
@@ -220,6 +221,7 @@ class BB_H263
     uint8_t *getFramebuffer(void) {return _h263.pFramebuffer;}
     void close(void);
     int getWidth() {return _h263.iWidth;}
+    int getCurrentFrame() {return _h263.iCurrentFrame;}
     int getHeight() {return _h263.iHeight;}
     int getFrameCount() {return _h263.iFrameTotal;}
     uint32_t getFrameDelay() {return _h263.iFrameDelay;}
@@ -373,9 +375,13 @@ int H263_decodeFrame(H263STATE *pH263, int xoff, int yoff)
                 iOffset = MOTOLONG(&s[iOffset]); // get the data offset
                 u32ChunkLen = MOTOLONG(&s[iOffset]) & 0xffffff;
             } else {
+                if (pH263->iCurrentFrame == 0) { // reset offset to first frame
+                    pH263->iCurrentOffset = pH263->iMovie;
+                }
+                iOffset = pH263->iCurrentOffset;
                 // offset already set, get the length and add it
                 u32ChunkLen = MOTOLONG(&s[pH263->iIndexSizes + pH263->iCurrentFrame * 4]);
-                pH263->iMovie += u32ChunkLen;
+                pH263->iCurrentOffset += u32ChunkLen;
             }
         }
         s += iOffset; // point to the compressed data of this frame
@@ -426,9 +432,6 @@ int H263_decodeFrame(H263STATE *pH263, int xoff, int yoff)
     H263_decodeFrameInternal(pH263, s, u32ChunkLen);
 decode_exit:
     pH263->iCurrentFrame++;
-//    if (pH263->iCurrentFrame == pH263->iFrameTotal) // reset to start to automatically loop videos
-//        pH263->iCurrentFrame = 0;
-//    goto do_it_again;
     if (pH263->iCurrentFrame == pH263->iFrameTotal) { // reset to start to automatically loop videos
         pH263->iCurrentFrame = 0;
         rc = H263_LAST_FRAME;
@@ -1700,7 +1703,7 @@ uint16_t *pMVTable, *pMCBPCTable;
 int *pClip;
 uint8_t *pTables;
 
-    if (pVideo->iCurrentFrame == 0) {
+    if (pVideo->iCurrentFrame == 0 && pVideo->pACTables == NULL) {
         if (pVideo->iFramePitch <= 0) {
             pVideo->iFramePitch = pVideo->iWidth * 2; // set default pitch
         }
