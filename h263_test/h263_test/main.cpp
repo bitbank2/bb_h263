@@ -126,8 +126,8 @@ int w, h, rc, iFrame;
 uint8_t *pBuf;
     
     printf("H263 test\n");
-    rc = h263.open("/Users/laurencebank/Downloads/homer_car_h263.mov", VideoDraw);
-//    rc = h263.open("/Users/laurencebank/Downloads/matrix_h263.mov", VideoDraw);
+//    rc = h263.open("/Users/laurencebank/Downloads/homer_car_h263.mov", VideoDraw);
+    rc = h263.open("/Users/laurencebank/Downloads/matrix_h263.mov", VideoDraw);
     if (rc == H263_SUCCESS) {
         printf("Video opened successfully\n");
         w = h263.getWidth();

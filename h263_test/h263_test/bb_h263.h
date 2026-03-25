@@ -86,6 +86,73 @@ typedef struct H263_draw_tag
     void *pUser;
 } H263DRAW;
 
+const uint8_t u8RangeTable[1024] = {
+    0x00,0x01,0x02,0x03,0x04,0x05,0x06,0x07,0x08,0x09,0x0a,0x0b,0x0c,0x0d,0x0e,0x0f,
+    0x10,0x11,0x12,0x13,0x14,0x15,0x16,0x17,0x18,0x19,0x1a,0x1b,0x1c,0x1d,0x1e,0x1f,
+    0x20,0x21,0x22,0x23,0x24,0x25,0x26,0x27,0x28,0x29,0x2a,0x2b,0x2c,0x2d,0x2e,0x2f,
+    0x30,0x31,0x32,0x33,0x34,0x35,0x36,0x37,0x38,0x39,0x3a,0x3b,0x3c,0x3d,0x3e,0x3f,
+    0x40,0x41,0x42,0x43,0x44,0x45,0x46,0x47,0x48,0x49,0x4a,0x4b,0x4c,0x4d,0x4e,0x4f,
+    0x50,0x51,0x52,0x53,0x54,0x55,0x56,0x57,0x58,0x59,0x5a,0x5b,0x5c,0x5d,0x5e,0x5f,
+    0x60,0x61,0x62,0x63,0x64,0x65,0x66,0x67,0x68,0x69,0x6a,0x6b,0x6c,0x6d,0x6e,0x6f,
+    0x70,0x71,0x72,0x73,0x74,0x75,0x76,0x77,0x78,0x79,0x7a,0x7b,0x7c,0x7d,0x7e,0x7f,
+    0x80,0x81,0x82,0x83,0x84,0x85,0x86,0x87,0x88,0x89,0x8a,0x8b,0x8c,0x8d,0x8e,0x8f,
+    0x90,0x91,0x92,0x93,0x94,0x95,0x96,0x97,0x98,0x99,0x9a,0x9b,0x9c,0x9d,0x9e,0x9f,
+    0xa0,0xa1,0xa2,0xa3,0xa4,0xa5,0xa6,0xa7,0xa8,0xa9,0xaa,0xab,0xac,0xad,0xae,0xaf,
+    0xb0,0xb1,0xb2,0xb3,0xb4,0xb5,0xb6,0xb7,0xb8,0xb9,0xba,0xbb,0xbc,0xbd,0xbe,0xbf,
+    0xc0,0xc1,0xc2,0xc3,0xc4,0xc5,0xc6,0xc7,0xc8,0xc9,0xca,0xcb,0xcc,0xcd,0xce,0xcf,
+    0xd0,0xd1,0xd2,0xd3,0xd4,0xd5,0xd6,0xd7,0xd8,0xd9,0xda,0xdb,0xdc,0xdd,0xde,0xdf,
+    0xe0,0xe1,0xe2,0xe3,0xe4,0xe5,0xe6,0xe7,0xe8,0xe9,0xea,0xeb,0xec,0xed,0xee,0xef,
+    0xf0,0xf1,0xf2,0xf3,0xf4,0xf5,0xf6,0xf7,0xf8,0xf9,0xfa,0xfb,0xfc,0xfd,0xfe,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+};
+
 // Callback function prototypes
 typedef int32_t (H263_READ_CALLBACK)(H263FILE *pFile, uint8_t *pBuf, int32_t iLen);
 typedef int32_t (H263_SEEK_CALLBACK)(H263FILE *pFile, int32_t iPosition);
@@ -972,245 +1039,7 @@ uint32_t ulTCOEF[] = {0x000001,3,0x4, // 0 pos
                            0x012701,13,0xbc, // 100
                            0x012801,13,0xbe, // 101
                            0xffffffff,7,0x03}; // 102 = ESCAPE
-/* Information to build the tables for decoding the run-level combined VLC */
-/* these codes are 2 to 17 bits (including the sign bit) */
-/* This table contains the run, level, bit pattern, and length (in that order) */
-/* of these codes to be built into several 128K tables for fast lookup */
-/* Taken from table 5.5 of the MPEG book, page 96-98 */
-/* To save time on decode, the sign bit is encoded into the table */
-/* The first codes for non-intra blocks are checked separately */
-// The codes can be broken in to short (<=11 bits) and long (first 7 bits = 0 + 10 more bits)
-// This makes for an arrangement of long codes first (1024)
-// followed by short codes (2048)
-// run = 0 to 31, level = -40 to 40, len = 2-17
-//
-const int iH263RunLenVLC[] = {
-                   0,  1, 0x0002,  2, /* first & EOB */
-                   0, -1, 0x0003,  2, /* first */
-//                    0,  1, 0x0006,  3, /* next */
-//                    0, -1, 0x0007,  3,
-                    1,  1, 0x0006,  4,
-                    1, -1, 0x0007,  4,
-                    0,  2, 0x0008,  5,
-                    0, -2, 0x0009,  5,
-                    2,  1, 0x000a,  5,
-                    2, -1, 0x000b,  5,
-                    0, 63, 0x0001,  6, /* escape */
-                    0,  3, 0x000a,  6,
-                    0, -3, 0x000b,  6,
-                    4,  1, 0x000c,  6,
-                    4, -1, 0x000d,  6,
-                    3,  1, 0x000e,  6,
-                    3, -1, 0x000f,  6,
-                    7,  1, 0x0008,  7,
-                    7, -1, 0x0009,  7,
-                    6,  1, 0x000a,  7,
-                    6, -1, 0x000b,  7,
-                    1,  2, 0x000c,  7,
-                    1, -2, 0x000d,  7,
-                    5,  1, 0x000e,  7,
-                    5, -1, 0x000f,  7,
-                    2,  2, 0x0008,  8,
-                    2, -2, 0x0009,  8,
-                    9,  1, 0x000a,  8,
-                    9, -1, 0x000b,  8,
-                    0,  4, 0x000c,  8,
-                    0, -4, 0x000d,  8,
-                    8,  1, 0x000e,  8,
-                    8, -1, 0x000f,  8,
-                   13,  1, 0x0040,  9,
-                   13, -1, 0x0041,  9,
-                    0,  6, 0x0042,  9,
-                    0, -6, 0x0043,  9,
-                   12,  1, 0x0044,  9,
-                   12, -1, 0x0045,  9,
-                   11,  1, 0x0046,  9,
-                   11, -1, 0x0047,  9,
-                    3,  2, 0x0048,  9,
-                    3, -2, 0x0049,  9,
-                    1,  3, 0x004a,  9,
-                    1, -3, 0x004b,  9,
-                    0,  5, 0x004c,  9,
-                    0, -5, 0x004d,  9,
-                   10,  1, 0x004e,  9,
-                   10, -1, 0x004f,  9,
-                   16,  1, 0x0010, 11,
-                   16, -1, 0x0011, 11,
-                    5,  2, 0x0012, 11,
-                    5, -2, 0x0013, 11,
-                    0,  7, 0x0014, 11,
-                    0, -7, 0x0015, 11,
-                    2,  3, 0x0016, 11,
-                    2, -3, 0x0017, 11,
-                    1,  4, 0x0018, 11,
-                    1, -4, 0x0019, 11,
-                   15,  1, 0x001a, 11,
-                   15, -1, 0x001b, 11,
-                   14,  1, 0x001c, 11,
-                   14, -1, 0x001d, 11,
-                    4,  2, 0x001e, 11,
-                    4, -2, 0x001f, 11,
-                    0, 11, 0x0020, 13,
-                    0,-11, 0x0021, 13,
-                    8,  2, 0x0022, 13,
-                    8, -2, 0x0023, 13,
-                    4,  3, 0x0024, 13,
-                    4, -3, 0x0025, 13,
-                    0, 10, 0x0026, 13,
-                    0,-10, 0x0027, 13,
-                    2,  4, 0x0028, 13,
-                    2, -4, 0x0029, 13,
-                    7,  2, 0x002a, 13,
-                    7, -2, 0x002b, 13,
-                   21,  1, 0x002c, 13,
-                   21, -1, 0x002d, 13,
-                   20,  1, 0x002e, 13,
-                   20, -1, 0x002f, 13,
-                    0,  9, 0x0030, 13,
-                    0, -9, 0x0031, 13,
-                   19,  1, 0x0032, 13,
-                   19, -1, 0x0033, 13,
-                   18,  1, 0x0034, 13,
-                   18, -1, 0x0035, 13,
-                    1,  5, 0x0036, 13,
-                    1, -5, 0x0037, 13,
-                    3,  3, 0x0038, 13,
-                    3, -3, 0x0039, 13,
-                    0,  8, 0x003a, 13,
-                    0, -8, 0x003b, 13,
-                    6,  2, 0x003c, 13,
-                    6, -2, 0x003d, 13,
-                   17,  1, 0x003e, 13,
-                   17, -1, 0x003f, 13,
-                   10,  2, 0x0020, 14,
-                   10, -2, 0x0021, 14,
-                    9,  2, 0x0022, 14,
-                    9, -2, 0x0023, 14,
-                    5,  3, 0x0024, 14,
-                    5, -3, 0x0025, 14,
-                    3,  4, 0x0026, 14,
-                    3, -4, 0x0027, 14,
-                    2,  5, 0x0028, 14,
-                    2, -5, 0x0029, 14,
-                    1,  7, 0x002a, 14,
-                    1, -7, 0x002b, 14,
-                    1,  6, 0x002c, 14,
-                    1, -6, 0x002d, 14,
-                    0, 15, 0x002e, 14,
-                    0,-15, 0x002f, 14,
-                    0, 14, 0x0030, 14,
-                    0,-14, 0x0031, 14,
-                    0, 13, 0x0032, 14,
-                    0,-13, 0x0033, 14,
-                    0, 12, 0x0034, 14,
-                    0,-12, 0x0035, 14,
-                   26,  1, 0x0036, 14,
-                   26, -1, 0x0037, 14,
-                   25,  1, 0x0038, 14,
-                   25, -1, 0x0039, 14,
-                   24,  1, 0x003a, 14,
-                   24, -1, 0x003b, 14,
-                   23,  1, 0x003c, 14,
-                   23, -1, 0x003d, 14,
-                   22,  1, 0x003e, 14,
-                   22, -1, 0x003f, 14,
-                    0, 31, 0x0020, 15,
-                    0,-31, 0x0021, 15,
-                    0, 30, 0x0022, 15,
-                    0,-30, 0x0023, 15,
-                    0, 29, 0x0024, 15,
-                    0,-29, 0x0025, 15,
-                    0, 28, 0x0026, 15,
-                    0,-28, 0x0027, 15,
-                    0, 27, 0x0028, 15,
-                    0,-27, 0x0029, 15,
-                    0, 26, 0x002a, 15,
-                    0,-26, 0x002b, 15,
-                    0, 25, 0x002c, 15,
-                    0,-25, 0x002d, 15,
-                    0, 24, 0x002e, 15,
-                    0,-24, 0x002f, 15,
-                    0, 23, 0x0030, 15,
-                    0,-23, 0x0031, 15,
-                    0, 22, 0x0032, 15,
-                    0,-22, 0x0033, 15,
-                    0, 21, 0x0034, 15,
-                    0,-21, 0x0035, 15,
-                    0, 20, 0x0036, 15,
-                    0,-20, 0x0037, 15,
-                    0, 19, 0x0038, 15,
-                    0,-19, 0x0039, 15,
-                    0, 18, 0x003a, 15,
-                    0,-18, 0x003b, 15,
-                    0, 17, 0x003c, 15,
-                    0,-17, 0x003d, 15,
-                    0, 16, 0x003e, 15,
-                    0,-16, 0x003f, 15,
-                    0, 40, 0x0020, 16,
-                    0,-40, 0x0021, 16,
-                    0, 39, 0x0022, 16,
-                    0,-39, 0x0023, 16,
-                    0, 38, 0x0024, 16,
-                    0,-38, 0x0025, 16,
-                    0, 37, 0x0026, 16,
-                    0,-37, 0x0027, 16,
-                    0, 36, 0x0028, 16,
-                    0,-36, 0x0029, 16,
-                    0, 35, 0x002a, 16,
-                    0,-35, 0x002b, 16,
-                    0, 34, 0x002c, 16,
-                    0,-34, 0x002d, 16,
-                    0, 33, 0x002e, 16,
-                    0,-33, 0x002f, 16,
-                    0, 32, 0x0030, 16,
-                    0,-32, 0x0031, 16,
-                    1, 14, 0x0032, 16,
-                    1,-14, 0x0033, 16,
-                    1, 13, 0x0034, 16,
-                    1,-13, 0x0035, 16,
-                    1, 12, 0x0036, 16,
-                    1,-12, 0x0037, 16,
-                    1, 11, 0x0038, 16,
-                    1,-11, 0x0039, 16,
-                    1, 10, 0x003a, 16,
-                    1,-10, 0x003b, 16,
-                    1,  9, 0x003c, 16,
-                    1, -9, 0x003d, 16,
-                    1,  8, 0x003e, 16,
-                    1, -8, 0x003f, 16,
-                    1, 18, 0x0020, 17,
-                    1,-18, 0x0021, 17,
-                    1, 17, 0x0022, 17,
-                    1,-17, 0x0023, 17,
-                    1, 16, 0x0024, 17,
-                    1,-16, 0x0025, 17,
-                    1, 15, 0x0026, 17,
-                    1,-15, 0x0027, 17,
-                    6,  3, 0x0028, 17,
-                    6, -3, 0x0029, 17,
-                   16,  2, 0x002a, 17,
-                   16, -2, 0x002b, 17,
-                   15,  2, 0x002c, 17,
-                   15, -2, 0x002d, 17,
-                   14,  2, 0x002e, 17,
-                   14, -2, 0x002f, 17,
-                   13,  2, 0x0030, 17,
-                   13, -2, 0x0031, 17,
-                   12,  2, 0x0032, 17,
-                   12, -2, 0x0033, 17,
-                   11,  2, 0x0034, 17,
-                   11, -2, 0x0035, 17,
-                   31,  1, 0x0036, 17,
-                   31, -1, 0x0037, 17,
-                   30,  1, 0x0038, 17,
-                   30, -1, 0x0039, 17,
-                   29,  1, 0x003a, 17,
-                   29, -1, 0x003b, 17,
-                   28,  1, 0x003c, 17,
-                   28, -1, 0x003d, 17,
-                   27,  1, 0x003e, 17,
-                   27, -1, 0x003f, 17,
-                    0,  0, 0x0000,  0};
+
 #define W1 2841 /* 2048*sqrt(2)*cos(1*pi/16) */
 #define W2 2676 /* 2048*sqrt(2)*cos(2*pi/16) */
 #define W3 2408 /* 2048*sqrt(2)*cos(3*pi/16) */
@@ -1409,43 +1238,35 @@ const int iPitch32 = iPitch/4; // pitch in uint32_t's
    if ((x+1)*16 > pVideo->iWidth)
       iMaxCol = (pVideo->iWidth/2) & 7;
    for (iRow=0; iRow <= iMaxRow; iRow++) {
-      pY = (signed short *)&pMCU[MCU0 + iRowOffsets[iRow]];
-      for (iCol=0; iCol<8; iCol++) {
-         if (iCol <= iMaxCol) {
-               s = pY[0];
-               if (s > 255) s = 255;
-               if (s < 0) s = 0;
+       pY = (signed short *)&pMCU[MCU0 + iRowOffsets[iRow]];
+       for (iCol=0; iCol<=iMaxCol; iCol++) {
+           s = pY[0];
+            s = u8RangeTable[s & 0x3ff];
                usIndex = (((s)>>2) & 0x3f); // Y1
                s = pCb[0];
-               if (s > 255) s = 255;
-               if (s < 0) s = 0;
+           s = u8RangeTable[s & 0x3ff];
                usIndex |= ((((s)>>3)&0x1f)<<6);
                s = pCr[0];
-               if (s > 255) s = 255;
-               if (s < 0) s = 0;
+           s = u8RangeTable[s & 0x3ff];
                usIndex |= ((((s)>>3)&0x1f)<<11);
                ulPixel = pVideo->usYUVRGB[usIndex];
                usIndex &= ~0x3f; // blast away Y1
                s = pY[1];
-               if (s > 255) s = 255;
-               if (s < 0) s = 0;
+           s = u8RangeTable[s & 0x3ff];
                usIndex |= (((s)>>2) & 0x3f); // Y2
                ulPixel |= (pVideo->usYUVRGB[usIndex] << 16);
                ulDest[0] = ulPixel;
                usIndex &= ~0x3f; // blast away Y2
                s = pY[8];
-               if (s > 255) s = 255;
-               if (s < 0) s = 0;
+           s = u8RangeTable[s & 0x3ff];
                usIndex |= (((s)>>2) & 0x3f); // Y3
                ulPixel = pVideo->usYUVRGB[usIndex];
                usIndex &= ~0x3f; // blast away Y3
                s = pY[9];
-               if (s > 255) s = 255;
-               if (s < 0) s = 0;
+           s = u8RangeTable[s & 0x3ff];
                usIndex |= (((s)>>2) & 0x3f); // Y4
                ulPixel |= (pVideo->usYUVRGB[usIndex] << 16);
                ulDest[iPitch32] = ulPixel;
-            } // if not beyond edge
          pCb++;
          pCr++;
          pY+= 2;
@@ -1454,7 +1275,7 @@ const int iPitch32 = iPitch/4; // pitch in uint32_t's
           }
          ulDest++; // advance 2 pixels
          } // for each column (pixel pair)
-      ulDest -= 8; // pull back 16 pixels
+      ulDest -= (iMaxCol+1); // pull back 16 pixels
       ulDest += iPitch32*2; // next pair of lines of dest pixels
       } // for each row
 } /* H263PutMCU22() */
@@ -1528,58 +1349,45 @@ signed char cTemp, cMV1, cMV2, cMV3; // the 3 candidate predictors
  ****************************************************************************/
 void H263CopyMB(H263STATE *pVideo, int x, int y, signed short *pMCU)
 {
-uint32_t *pS, *pD;
+uint64_t *pS, *pD;
 signed short *pDest;
 int i, cy;
-
+const int iFrameDelta = pVideo->iFrameCX>>2;
+    
    // first copy the luma component
    pDest = pVideo->pFRef[0];
-   pD = (uint32_t *)&pDest[(x*16)+(y*16*pVideo->iFrameCX)];
-   pS = (uint32_t *)pMCU;
+   pD = (uint64_t *)&pDest[(x*16)+(y*16*pVideo->iFrameCX)];
+   pS = (uint64_t *)pMCU;
    // copy top half
-   for (cy=0; cy<8; cy++)
-      {
+   for (cy=0; cy<8; cy++) {
       pD[0] = pS[0]; // top left block
       pD[1] = pS[1];
-      pD[2] = pS[2];
-      pD[3] = pS[3];
-      pD[4] = pS[32]; // top right block
-      pD[5] = pS[33];
-      pD[6] = pS[34];
-      pD[7] = pS[35];
-      pD += (pVideo->iFrameCX>>1);
-      pS += 4;
+      pD[2] = pS[16]; // top right block
+      pD[3] = pS[17];
+      pD += iFrameDelta;
+       pS += 2;
       }
-   pD = (uint32_t *)&pDest[(x*16)+(((y*16)+8)*pVideo->iFrameCX)];
-   pS = (uint32_t *)&pMCU[2*DCTSIZE2];
+   pD = (uint64_t *)&pDest[(x*16)+(((y*16)+8)*pVideo->iFrameCX)];
+   pS = (uint64_t *)&pMCU[2*DCTSIZE2];
    // copy bottom half
-   for (cy=0; cy<8; cy++)
-      {
+   for (cy=0; cy<8; cy++) {
       pD[0] = pS[0]; // top left block
       pD[1] = pS[1];
-      pD[2] = pS[2];
-      pD[3] = pS[3];
-      pD[4] = pS[32]; // top right block
-      pD[5] = pS[33];
-      pD[6] = pS[34];
-      pD[7] = pS[35];
-      pD += (pVideo->iFrameCX>>1);
-      pS += 4;
+      pD[2] = pS[16]; // top right block
+      pD[3] = pS[17];
+      pD += iFrameDelta;
+      pS += 2;
       }
    // Now copy the 2 chroma components
-   for (i=0; i<2; i++)
-      {
+   for (i=0; i<2; i++) {
       pDest = pVideo->pFRef[1+i];
-      pD = (uint32_t *)&pDest[(x*8)+(y*8*(pVideo->iFrameCX>>1))];
-      pS = (uint32_t *)&pMCU[(4+i)*DCTSIZE2];
-      for (cy=0; cy<8; cy++)
-         {
+      pD = (uint64_t *)&pDest[(x*8)+(y*8*(pVideo->iFrameCX>>1))];
+      pS = (uint64_t *)&pMCU[(4+i)*DCTSIZE2];
+      for (cy=0; cy<8; cy++) {
          pD[0] = pS[0];
          pD[1] = pS[1];
-         pD[2] = pS[2];
-         pD[3] = pS[3];
-         pD += (pVideo->iFrameCX>>2);
-         pS += 4;
+         pD += iFrameDelta>>1;
+         pS += 2;
          }
       }
 } /* H263CopyMB() */
@@ -1591,42 +1399,6 @@ int i, j, iValue, iCount, iRun, iLevel, iBits, iLen;
    pVideo->usYUVRGB = (uint16_t *)malloc(0x20000);
    pVideo->iCurrentFrame = 0;
    pVideo->iFRefFrame = -1;
-#ifdef FUTURE
-   // prepare the AC decode table
-   pVideo->pACTables = (unsigned short *)malloc(3072*sizeof(short));
-   i = 0;
-   iRun = iH263RunLenVLC[i*4];
-   iLevel = iH263RunLenVLC[i*4 + 1];
-   iBits = iH263RunLenVLC[i*4 + 2];
-   iLen = iH263RunLenVLC[i*4 + 3];
-   while (iLen)
-      {
-      unsigned short usCode;
-      usCode = (unsigned short)((iRun << 11) | ((iLevel & 0x7f)<<4) | (iLen-2));
-      if (iLen > 11) // long codes
-         {
-         iLen -= 7; // remove 7 leading zeros
-         iCount = 1 << (10-iLen); /* Number of times to repeat this code */
-         iValue = iBits << (10 - iLen); /* Starting value use as an index */
-         /* Fill all repeated entries */
-         for (j = 0; j < iCount; j++)
-            pVideo->pACTables[iValue + j] = usCode;
-         }
-      else // short codes
-         {
-             iCount = 1 << (11-iLen); /* Number of times to repeat this code */
-             iValue = 1024 + (iBits << (11 - iLen)); /* Starting value use as an index */
-             /* Fill all repeated entries */
-             for (j = 0; j < iCount; j++)
-                pVideo->pACTables[iValue + j] = usCode;
-             }
-          i++;
-          iRun = iH263RunLenVLC[i*4];
-          iLevel = iH263RunLenVLC[i*4 + 1];
-          iBits = iH263RunLenVLC[i*4 + 2];
-          iLen = iH263RunLenVLC[i*4 + 3];
-          }
-#endif // FUTURE
     
        // prepare the color conversion table
        for (i=0; i<65536; i++) {
