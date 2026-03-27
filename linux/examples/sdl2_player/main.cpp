@@ -41,7 +41,7 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    win = SDL_CreateWindow("H.263 Player", 400, 400, w, h, SDL_WINDOW_SHOWN);
+    win = SDL_CreateWindow("H.263 Player", 352, 288, w, h, SDL_WINDOW_SHOWN);
     if (win == nullptr) {
         printf("SDL_CreateWindow Error: %s\n", SDL_GetError());
         return EXIT_FAILURE;

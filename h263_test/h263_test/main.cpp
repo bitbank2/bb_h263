@@ -2,11 +2,6 @@
 
 BB_H263 h263;
 
-void VideoDraw(H263DRAW *pDraw)
-{
-    
-} /* VideoDraw() */
-
 /* Windows BMP header for RGB565 images */
 uint8_t winbmphdr_rgb565[138] =
         {0x42,0x4d,0,0,0,0,0,0,0,0,0x8a,0,0,0,0x7c,0,
@@ -127,7 +122,7 @@ uint8_t *pBuf;
     
     printf("H263 test\n");
 //    rc = h263.open("/Users/laurencebank/Downloads/homer_car_h263.mov", VideoDraw);
-    rc = h263.open("/Users/laurencebank/Downloads/matrix_h263.mov", VideoDraw);
+    rc = h263.open("/Users/laurencebank/Downloads/matrix_h263.mov");
     if (rc == H263_SUCCESS) {
         printf("Video opened successfully\n");
         w = h263.getWidth();

@@ -156,7 +156,6 @@ const uint8_t u8RangeTable[1024] = {
 // Callback function prototypes
 typedef int32_t (H263_READ_CALLBACK)(H263FILE *pFile, uint8_t *pBuf, int32_t iLen);
 typedef int32_t (H263_SEEK_CALLBACK)(H263FILE *pFile, int32_t iPosition);
-typedef void (H263_DRAW_CALLBACK)(H263DRAW *pDraw);
 typedef void * (H263_OPEN_CALLBACK)(const char *szFilename, uint32_t *pFileSize);
 typedef void (H263_CLOSE_CALLBACK)(void *pHandle);
 
@@ -166,7 +165,6 @@ typedef struct tagvideo {
     int iXOffset, iYOffset; // placement on the display
     H263_READ_CALLBACK *pfnRead;
     H263_SEEK_CALLBACK *pfnSeek;
-    H263_DRAW_CALLBACK *pfnDraw;
     H263_CLOSE_CALLBACK *pfnClose;
     H263FILE H263File;
     void *pUser;
@@ -231,9 +229,7 @@ uint32_t H263_parseAVI(H263STATE *pH263, const uint8_t *pData, int iDataSize);
 int H263_decodeFrame(H263STATE *pH263, int xoff, int yoff);
 void H263_close(H263STATE *pH263);
 static int H263_decodeFrameInternal(H263STATE *pVideo, uint8_t *pData, int iDataLen);
-#ifdef __LINUX__
-
-#endif // __LINUX__
+#if defined( __LINUX__ ) || defined( __MACH__ )
 static void * linuxOpen(const char *filename, uint32_t *size) {
     static FILE *myfile;
     size_t len;
@@ -269,6 +265,8 @@ static int32_t linuxSeek(H263FILE *handle, int32_t position) {
     handle->iPos = (int32_t)ftell(pFile);
     return handle->iPos;
 }
+#endif // __LINUX__
+
 #ifdef __cplusplus
 //
 // The BB_H263 class wraps portable C code which does the actual work
@@ -279,10 +277,10 @@ class BB_H263
   public:
     BB_H263() {memset(&_h263, 0, sizeof(_h263));}
     int decodeFrame(int x = 0, int y = 0);
-    int open(const uint8_t *pData, int iDataSize, H263_DRAW_CALLBACK *pDraw);
-    int open(const char *szFilename, H263_OPEN_CALLBACK *pfnOpen, H263_CLOSE_CALLBACK *pfnClose, H263_READ_CALLBACK *pfnRead, H263_SEEK_CALLBACK *pfnSeek, H263_DRAW_CALLBACK *pfnDraw);
+    int open(const uint8_t *pData, int iDataSize);
+    int open(const char *szFilename, H263_OPEN_CALLBACK *pfnOpen, H263_CLOSE_CALLBACK *pfnClose, H263_READ_CALLBACK *pfnRead, H263_SEEK_CALLBACK *pfnSeek);
 #if defined( __LINUX__ ) || defined ( __MACH__ )
-    int open(const char *szFilename, H263_DRAW_CALLBACK *pfnDraw);
+    int open(const char *szFilename);
 #endif
     void setFrameBuf(uint8_t *pFramebuffer, int iPitch = -1) { _h263.pFramebuffer = pFramebuffer; _h263.iFramePitch = iPitch;}
     uint8_t *getFramebuffer(void) {return _h263.pFramebuffer;}
@@ -295,30 +293,69 @@ class BB_H263
     void setUserPointer(void *p) { _h263.pUser = p;}
     void setPixelType(uint8_t u8Type) { _h263.u8PixelType = u8Type;} // defaults to little endian
     uint8_t getPixelType() {return _h263.u8PixelType;}
-
+    
+  protected:
+    int openInternal(void);
+    
   private:
     H263STATE _h263;
 }; // class H263
 
+int BB_H263::openInternal(void)
+{
+    uint8_t *s;
+    uint32_t u32, u32VideoType;
+    int iDataSize;
+    
+    iDataSize = _h263.H263File.iSize;
+    s = _h263.H263File.pData;
+    u32 = *(uint32_t *)&s[4]; // file size
+    
+    if (MOTOLONG(s) == 0x52494646 /* RIFF */ &&  u32 == (iDataSize-8) && MOTOLONG(&s[8]) == 0x41564920 /* AVI */) {
+        _h263.u8FileType = H263_FILE_AVI;
+    }
+    if (MOTOLONG(&s[4]) == 0x736b6970 /*'skip'*/ || MOTOLONG(&s[4]) == 0x66747970 /*'ftyp'*/ ||
+        MOTOLONG(&s[4]) == 0x6d646174 /*'mdat'*/ || MOTOLONG(&s[4]) == 0x706e6f74 /*'pnot'*/ ||
+        MOTOLONG(&s[4]) == 0x6d6f6f76 /*'moov'*/ || MOTOLONG(&s[4]) == 0x77696465 /*'wide'*/) {
+        _h263.u8FileType = H263_FILE_QT;
+    }
+    if (_h263.u8FileType == H263_FILE_INVALID) {
+        return H263_INVALID_FILE;
+    }
+    if (_h263.u8FileType == H263_FILE_AVI) { // parse AVI file
+        u32VideoType = H263_parseAVI(&_h263, s, iDataSize);
+    } else {  // Parse QuickTime file
+        u32VideoType = H263_parseQT(&_h263, s, iDataSize);
+    }
+    // Is it H263?
+    if ((u32VideoType & 0xffffff) != 0x323633 /*'x263'*/)
+        return H263_NOT_SUPPORTED;
+    if (_h263.u8FileType == H263_FILE_AVI) {
+        u32 = MOTOLONG(&s[_h263.iMovie]);
+        if (u32 == 0x6d6f7669 /* movi */) { // start of the movie data
+            _h263.iMovie += 4; // offset into the 'movie'
+        }
+    }
+    return H263_SUCCESS;
+
+} /* openInterna() */
 // Class implementation
-int BB_H263::open(const uint8_t *pData, int iDataSize, H263_DRAW_CALLBACK *pDraw)
+int BB_H263::open(const uint8_t *pData, int iDataSize)
 {
     _h263.H263File.pData = (uint8_t *)pData;
     _h263.H263File.iSize = iDataSize;
-    _h263.pfnDraw = pDraw;
-    return H263_SUCCESS;
+    return openInternal();
 } /* open() */
 
-int BB_H263::open(const char *szFilename, H263_DRAW_CALLBACK *pfnDraw)
+#if defined( __LINUX__ ) || defined ( __MACH__ )
+int BB_H263::open(const char *szFilename)
 {
     FILE *pFile;
     uint32_t iDataSize;
-    uint8_t *s, *pData, *pEnd;
-    uint32_t u32, u32VideoType;
-
+    uint8_t *pData;
+    
     if (/*!pfnDraw || */ !szFilename) return H263_INVALID_PARAMETER;
     
-    _h263.pfnDraw = pfnDraw;
     _h263.pfnRead = linuxRead;
     _h263.pfnSeek = linuxSeek;
     _h263.pfnClose = linuxClose;
@@ -337,50 +374,21 @@ int BB_H263::open(const char *szFilename, H263_DRAW_CALLBACK *pfnDraw)
     linuxRead(&_h263.H263File, pData, iDataSize);
     linuxClose(_h263.H263File.fHandle);
     _h263.H263File.fHandle = NULL; // DEBUG - treat it as not a file
-    s = pData;
-    pEnd = &s[iDataSize];
-    u32 = *(uint32_t *)&s[4]; // file size
-    
-    if (MOTOLONG(s) == 0x52494646 /* RIFF */ &&  u32 == (iDataSize-8) && MOTOLONG(&s[8]) == 0x41564920 /* AVI */) {
-        _h263.u8FileType = H263_FILE_AVI;
-    }
-    if (MOTOLONG(&s[4]) == 0x736b6970 /*'skip'*/ || MOTOLONG(&s[4]) == 0x66747970 /*'ftyp'*/ ||
-        MOTOLONG(&s[4]) == 0x6d646174 /*'mdat'*/ || MOTOLONG(&s[4]) == 0x706e6f74 /*'pnot'*/ ||
-        MOTOLONG(&s[4]) == 0x6d6f6f76 /*'moov'*/ || MOTOLONG(&s[4]) == 0x77696465 /*'wide'*/) {
-        _h263.u8FileType = H263_FILE_QT;
-    }
-    if (_h263.u8FileType == H263_FILE_INVALID) {
-        return H263_INVALID_FILE;
-    }
-    if (_h263.u8FileType == H263_FILE_AVI) { // parse AVI file
-        u32VideoType = H263_parseAVI(&_h263, pData, iDataSize);
-    } else {  // Parse QuickTime file
-        u32VideoType = H263_parseQT(&_h263, pData, iDataSize);
-    }
-    // Is it H263?
-    if ((u32VideoType & 0xffffff) != 0x323633 /*'x263'*/)
-        return H263_NOT_SUPPORTED;
-    if (_h263.u8FileType == H263_FILE_AVI) {
-        u32 = MOTOLONG(&s[_h263.iMovie]);
-        if (u32 == 0x6d6f7669 /* movi */) { // start of the movie data
-            _h263.iMovie += 4; // offset into the 'movie'
-        }
-    }
-    return H263_SUCCESS;
+    return openInternal();
 } /* open() */
+#endif // __LINUX__
 
 void BB_H263::close(void)
 {
     H263_close(&_h263);
 } /* close() */
 
-int BB_H263::open(const char *szFilename, H263_OPEN_CALLBACK *pfnOpen, H263_CLOSE_CALLBACK *pfnClose, H263_READ_CALLBACK *pfnRead, H263_SEEK_CALLBACK *pfnSeek, H263_DRAW_CALLBACK *pfnDraw)
+int BB_H263::open(const char *szFilename, H263_OPEN_CALLBACK *pfnOpen, H263_CLOSE_CALLBACK *pfnClose, H263_READ_CALLBACK *pfnRead, H263_SEEK_CALLBACK *pfnSeek)
 {
     FILE *pFile;
     uint32_t iDataSize;
     
     if (!pfnOpen || !pfnClose || !pfnRead || !pfnSeek) return H263_INVALID_PARAMETER;
-    _h263.pfnDraw = pfnDraw;
     _h263.pfnRead = pfnRead;
     _h263.pfnSeek = pfnSeek;
     _h263.pfnClose = pfnClose;
@@ -545,17 +553,17 @@ void H263_close(H263STATE *pH263) {
 //
 uint32_t H263_parseQT(H263STATE *pH263, const uint8_t *pData, int iDataSize)
 {
-    uint8_t *s, *pEnd;
+    uint8_t *s;
     uint32_t u32, i, j, iOffset;
     uint32_t u32Chunk, u32Type, u32VideoType = 0; //, u32AudioType = 0;
     uint32_t iTimeScale = 0, iAudioTimeScale = 0, iVideoTimeScale = 0;
     
     s = (uint8_t *)pData;
     if (pH263->H263File.fHandle) { // from a file
-        pEnd = &s[256];
+//        pEnd = &s[256];
         iDataSize = pH263->H263File.iSize;
     } else {
-        pEnd = &s[iDataSize];
+//        pEnd = &s[iDataSize];
     }
     iOffset = i = 0;
     u32Type = 0;
@@ -710,16 +718,16 @@ uint32_t H263_parseQT(H263STATE *pH263, const uint8_t *pData, int iDataSize)
 //
 uint32_t H263_parseAVI(H263STATE *pH263, const uint8_t *pData, int iDataSize)
 {
-    uint8_t *s, *pEnd;
+    uint8_t *s;
     uint32_t u32, iExtra, i, iOffset;
     uint32_t u32Chunk, u32VideoType = 0; //, u32AudioType = 0;
 
     s = (uint8_t *)pData;
     if (pH263->H263File.fHandle) { // from a file
-        pEnd = &s[256];
+ //       pEnd = &s[256];
         iDataSize = pH263->H263File.iSize;
     } else {
-        pEnd = &s[iDataSize];
+//        pEnd = &s[iDataSize];
     }
 
     i = 0;
@@ -1394,7 +1402,7 @@ const int iFrameDelta = pVideo->iFrameCX>>2;
 
 void PrepVideoStruct(H263STATE *pVideo)
 {
-int i, j, iValue, iCount, iRun, iLevel, iBits, iLen;
+int i, j;
 
    pVideo->usYUVRGB = (uint16_t *)malloc(0x20000);
    pVideo->iCurrentFrame = 0;
@@ -1464,7 +1472,8 @@ int i, x, y, iGOBy, iErr, iOff, iLen, iBit;
 int iTrueWidth, iTrueHeight;
 uint8_t cMask, cQuant, *buf;
 uint32_t ulBits, ulCode;
-uint8_t cLevel, ucTR, ucPSBI, ucCBPY, *pCBPY;
+uint8_t cLevel, ucCBPY, *pCBPY;
+// uint8_t ucTR, ucPSBI;
 int16_t *pMCU = pVideo->MCUs, us;
 int iGOB, iGOBCount, iMB, iMBCount, iMBMax;
 char cSourceFormat, ucMBType, ucCBPC;
@@ -1595,7 +1604,7 @@ uint8_t *pTables;
         pVideo->iLastError = -1;// PIL_ERROR_DECOMP;
       goto h263z;
     }
-   ucTR = (uint8_t) (ulBits >> (24 - iBit)); // get TR (temporal reference) (8-bits)
+//   ucTR = (uint8_t) (ulBits >> (24 - iBit)); // get TR (temporal reference) (8-bits)
    iBit += 8;
    GETMOREBITS
    ulPTYPE = (ulBits >> (19-iBit)) & 0x1fff; // get PTYPE (13-bits)
@@ -1626,7 +1635,7 @@ uint8_t *pTables;
    ulCode = (ulBits >> (31-iBit)) & 1; // get CPM (1-bit)
    iBit++;
     if (ulCode) { // if CPM bit set, PSBI bits present
-      ucPSBI = (uint8_t) ((ulBits >> (30-iBit)) & 3); // get 2 PSBI bits
+//      ucPSBI = (uint8_t) ((ulBits >> (30-iBit)) & 3); // get 2 PSBI bits
       iBit += 2;
       }
    ulCode = (ulBits >> (31-iBit)) & 1; // get PEI extra insertion information (1-bit)
