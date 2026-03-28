@@ -185,6 +185,8 @@ typedef struct tagvideo {
     uint32_t iIndexSizes; // offset to frame index (data sizes)
     uint32_t iIndexLen;
     uint8_t *pFramebuffer;
+    uint8_t *pFrameData;
+    int iAudioTotal; // number of audio packets
     int iFRefFrame; // frame number of forward reference frame
     int16_t *pBRef[3]; // backward reference frame
     int16_t *pFRef[3]; // forward reference frame
@@ -205,6 +207,7 @@ typedef struct tagvideo {
     int iCurrentFrame;
     int iLastError;
     int bPacketized; // indicates if the data stream is in packets or is raw video (single stream)
+    int bAllocated; // file data was allocated and needs to be freed
     int iFrameTotal;
     uint32_t iFrameDelay;
     uint8_t u8FileBuf[H263_FILE_BUF_SIZE];
@@ -304,11 +307,19 @@ class BB_H263
 int BB_H263::openInternal(void)
 {
     uint8_t *s;
-    uint32_t u32, u32VideoType;
-    int iDataSize;
-    
+    uint32_t u32, u32VideoType = 0;
+    int i, iLen, iOffset;
+    int j, iFrame, iAudio;
+    uint32_t u32Len, u32MaxLen, iDataSize = 0;
+
     iDataSize = _h263.H263File.iSize;
-    s = _h263.H263File.pData;
+    if (_h263.H263File.pData) {
+        s = _h263.H263File.pData;
+    } else {
+        s = _h263.u8FileBuf;
+        (*_h263.pfnSeek)(&_h263.H263File, 0);
+        (*_h263.pfnRead)(&_h263.H263File, s, 256);
+    }
     u32 = *(uint32_t *)&s[4]; // file size
     
     if (MOTOLONG(s) == 0x52494646 /* RIFF */ &&  u32 == (iDataSize-8) && MOTOLONG(&s[8]) == 0x41564920 /* AVI */) {
@@ -336,9 +347,80 @@ int BB_H263::openInternal(void)
             _h263.iMovie += 4; // offset into the 'movie'
         }
     }
+    // Read the index list and shrink it a bit since we don't need to use 16 bytes per entry
+    _h263.pFrameList = (uint32_t *)malloc(_h263.iFrameTotal * sizeof(uint32_t));
+    _h263.pFrameLengths = (uint32_t *)malloc(_h263.iFrameTotal * sizeof(uint32_t));
+    if (_h263.iAudioLen) {
+        _h263.pAudioList = (uint32_t *)malloc((_h263.iIndexLen - (_h263.iFrameTotal*16))/4);
+    }
+    iFrame = iAudio = 0; // index output
+    (*_h263.pfnSeek)(&_h263.H263File, _h263.iIndex); // start of index
+    iLen = _h263.iIndexLen;
+    iOffset = 0;
+    if (iLen == 0) {
+        iLen = _h263.iFrameTotal*4; // Quicktime which uses atom sizes instead of offsets
+        iOffset = _h263.iMovie;
+    }
+    u32MaxLen = 0; // keep track of the biggest blob of compressed frame data
+    for (i = 0; i<iLen; i += 256) { // what fits in our temp buffer
+        (*_h263.pfnRead)(&_h263.H263File, s, 256); // read a block of data
+        if (_h263.u8FileType == H263_FILE_AVI) {
+            for (j = 0; j < 256/16; j++) {
+                u32 = _h263.iMovie + *(uint32_t *)&s[(j * 16) + 8] - 4;
+                if (s[j*16 + 2] == 'd') { // video frame
+                    if (s[(j * 16) + 4] == 0x10) { // key frame?
+                        u32 |= 0x80000000; // mark the high bit
+                    }
+                    u32Len = *(uint32_t *)&s[(j * 16) + 12];
+                    u32Len += 8; // plus chunk header
+                    _h263.pFrameLengths[iFrame] = u32Len; // AVI marker+chunk length is stored ahead of the actual data
+                    _h263.pFrameList[iFrame++] = u32;
+                    if (u32Len > u32MaxLen) u32MaxLen = u32Len;
+                } else if (s[j*16 + 2] == 'w' && _h263.pAudioList) { // audio
+                    _h263.pAudioList[iAudio++] = u32;
+                }
+                if (iFrame == _h263.iFrameTotal) {
+                    // break out of the loop
+                    j = 256; i = _h263.iIndexLen;
+                }
+            } // for j
+        } else { // Quicktime
+            for (j = 0; j < 256/4; j++) {
+                u32 = MOTOLONG(&s[(j * 4)]);
+//                        u32 |= 0x80000000; // mark the high bit for key frames
+                _h263.pFrameList[iFrame++] = u32;
+                if (iFrame == _h263.iFrameTotal) {
+                    // break out of the loop
+                    j = 256; i = _h263.iIndexLen;
+                }
+            } // for j
+        }
+    } // for i
+    if (_h263.u8FileType == H263_FILE_QT) { // Get the frame lengths (separate atom)
+        (*_h263.pfnSeek)(&_h263.H263File, _h263.iIndexSizes); // start of index of data sizes
+        iLen = _h263.iFrameTotal*4; // Quicktime which uses atom sizes instead of offsets
+        iFrame = 0;
+        for (i = 0; i<iLen; i += 256) { // what fits in our temp buffer
+            (*_h263.pfnRead)(&_h263.H263File, s, 256); // read a block of data
+            for (j = 0; j < 256/4; j++) {
+                u32 = MOTOLONG(&s[(j * 4)]);
+                _h263.pFrameLengths[iFrame++] = u32; // save the length
+                if (u32 > u32MaxLen) u32MaxLen = u32;
+                if (iFrame == _h263.iFrameTotal) {
+                    // break out of the loop
+                    j = 256; i = _h263.iIndexLen;
+                }
+            } // for j
+        } // for i
+    }
+    _h263.u32MaxFrameLength = u32MaxLen;
+    //printf("max len = %d\n", u32MaxLen);
+    _h263.pFrameData = (uint8_t *)malloc(u32MaxLen); // allocate a buffer for the compressed data
+    _h263.iAudioTotal = iAudio; // number of audio packets
     return H263_SUCCESS;
 
 } /* openInterna() */
+
 // Class implementation
 int BB_H263::open(const uint8_t *pData, int iDataSize)
 {
@@ -354,7 +436,7 @@ int BB_H263::open(const char *szFilename)
     uint32_t iDataSize;
     uint8_t *pData;
     
-    if (/*!pfnDraw || */ !szFilename) return H263_INVALID_PARAMETER;
+    if (!szFilename) return H263_INVALID_PARAMETER;
     
     _h263.pfnRead = linuxRead;
     _h263.pfnSeek = linuxSeek;
@@ -365,15 +447,16 @@ int BB_H263::open(const char *szFilename)
         linuxClose(pFile);
         return H263_INVALID_FILE;
     }
-    pData = (uint8_t *)malloc(iDataSize);
+//    pData = (uint8_t *)malloc(iDataSize);
+//    _h263.bAllocated = 1;
     _h263.H263File.fHandle = pFile;
     _h263.H263File.iPos = 0; // current file position
     _h263.H263File.iSize = iDataSize; // file size
-    _h263.H263File.pData = pData;
+//    _h263.H263File.pData = pData;
     // Debug - read the file into memory
-    linuxRead(&_h263.H263File, pData, iDataSize);
-    linuxClose(_h263.H263File.fHandle);
-    _h263.H263File.fHandle = NULL; // DEBUG - treat it as not a file
+//    linuxRead(&_h263.H263File, pData, iDataSize);
+//    linuxClose(_h263.H263File.fHandle);
+//    _h263.H263File.fHandle = NULL; // DEBUG - treat it as not a file
     return openInternal();
 } /* open() */
 #endif // __LINUX__
@@ -475,7 +558,8 @@ int H263_decodeFrame(H263STATE *pH263, int xoff, int yoff)
         } else { // The new position is behind or far ahead of the current read position, so we must use seek
             (*pH263->pfnSeek)(&pH263->H263File, iPos);
         }
-        s = pH263->u8FileBuf;
+//        s = pH263->u8FileBuf;
+        s = pH263->pFrameData;
         iOffset = 0;
         //printf("len = %d\n", pH263->pFrameLengths[pH263->iCurrentFrame]);
         (*pH263->pfnRead)(&pH263->H263File, s, pH263->pFrameLengths[pH263->iCurrentFrame]); // read the compressed frame
@@ -518,9 +602,14 @@ void H263_close(H263STATE *pH263) {
     if (!pH263) return;
     if (pH263->H263File.fHandle && pH263->pfnClose) {
         (*pH263->pfnClose)(pH263->H263File.fHandle);
-    } else {
+        pH263->H263File.fHandle = nullptr;
+    } else if (pH263->bAllocated){
         free(pH263->H263File.pData);
         pH263->H263File.pData = NULL;
+    }
+    if (pH263->pFrameData) {
+        free(pH263->pFrameData);
+        pH263->pFrameData = NULL;
     }
     if (pH263->usYUVRGB) {
         free(pH263->usYUVRGB);
@@ -561,7 +650,6 @@ uint32_t H263_parseQT(H263STATE *pH263, const uint8_t *pData, int iDataSize)
     s = (uint8_t *)pData;
     if (pH263->H263File.fHandle) { // from a file
 //        pEnd = &s[256];
-        iDataSize = pH263->H263File.iSize;
     } else {
 //        pEnd = &s[iDataSize];
     }
