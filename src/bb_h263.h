@@ -26,6 +26,10 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(__arm64__) || defined(__aarch64__)
+#include <arm_neon.h>
+#define HAS_NEON
+#endif
 
 #define DCTSIZE2 64
 #define MB_LOWER -2048
@@ -156,7 +160,6 @@ const uint8_t u8RangeTable[1024] = {
 // Callback function prototypes
 typedef int32_t (H263_READ_CALLBACK)(H263FILE *pFile, uint8_t *pBuf, int32_t iLen);
 typedef int32_t (H263_SEEK_CALLBACK)(H263FILE *pFile, int32_t iPosition);
-typedef void (H263_DRAW_CALLBACK)(H263DRAW *pDraw);
 typedef void * (H263_OPEN_CALLBACK)(const char *szFilename, uint32_t *pFileSize);
 typedef void (H263_CLOSE_CALLBACK)(void *pHandle);
 
@@ -166,7 +169,6 @@ typedef struct tagvideo {
     int iXOffset, iYOffset; // placement on the display
     H263_READ_CALLBACK *pfnRead;
     H263_SEEK_CALLBACK *pfnSeek;
-    H263_DRAW_CALLBACK *pfnDraw;
     H263_CLOSE_CALLBACK *pfnClose;
     H263FILE H263File;
     void *pUser;
@@ -187,6 +189,8 @@ typedef struct tagvideo {
     uint32_t iIndexSizes; // offset to frame index (data sizes)
     uint32_t iIndexLen;
     uint8_t *pFramebuffer;
+    uint8_t *pFrameData;
+    int iAudioTotal; // number of audio packets
     int iFRefFrame; // frame number of forward reference frame
     int16_t *pBRef[3]; // backward reference frame
     int16_t *pFRef[3]; // forward reference frame
@@ -207,6 +211,7 @@ typedef struct tagvideo {
     int iCurrentFrame;
     int iLastError;
     int bPacketized; // indicates if the data stream is in packets or is raw video (single stream)
+    int bAllocated; // file data was allocated and needs to be freed
     int iFrameTotal;
     uint32_t iFrameDelay;
     uint8_t u8FileBuf[H263_FILE_BUF_SIZE];
@@ -231,9 +236,7 @@ uint32_t H263_parseAVI(H263STATE *pH263, const uint8_t *pData, int iDataSize);
 int H263_decodeFrame(H263STATE *pH263, int xoff, int yoff);
 void H263_close(H263STATE *pH263);
 static int H263_decodeFrameInternal(H263STATE *pVideo, uint8_t *pData, int iDataLen);
-#ifdef __LINUX__
-
-#endif // __LINUX__
+#if defined( __LINUX__ ) || defined( __MACH__ )
 static void * linuxOpen(const char *filename, uint32_t *size) {
     static FILE *myfile;
     size_t len;
@@ -269,6 +272,8 @@ static int32_t linuxSeek(H263FILE *handle, int32_t position) {
     handle->iPos = (int32_t)ftell(pFile);
     return handle->iPos;
 }
+#endif // __LINUX__
+
 #ifdef __cplusplus
 //
 // The BB_H263 class wraps portable C code which does the actual work
@@ -279,10 +284,10 @@ class BB_H263
   public:
     BB_H263() {memset(&_h263, 0, sizeof(_h263));}
     int decodeFrame(int x = 0, int y = 0);
-    int open(const uint8_t *pData, int iDataSize, H263_DRAW_CALLBACK *pDraw);
-    int open(const char *szFilename, H263_OPEN_CALLBACK *pfnOpen, H263_CLOSE_CALLBACK *pfnClose, H263_READ_CALLBACK *pfnRead, H263_SEEK_CALLBACK *pfnSeek, H263_DRAW_CALLBACK *pfnDraw);
+    int open(const uint8_t *pData, int iDataSize);
+    int open(const char *szFilename, H263_OPEN_CALLBACK *pfnOpen, H263_CLOSE_CALLBACK *pfnClose, H263_READ_CALLBACK *pfnRead, H263_SEEK_CALLBACK *pfnSeek);
 #if defined( __LINUX__ ) || defined ( __MACH__ )
-    int open(const char *szFilename, H263_DRAW_CALLBACK *pfnDraw);
+    int open(const char *szFilename);
 #endif
     void setFrameBuf(uint8_t *pFramebuffer, int iPitch = -1) { _h263.pFramebuffer = pFramebuffer; _h263.iFramePitch = iPitch;}
     uint8_t *getFramebuffer(void) {return _h263.pFramebuffer;}
@@ -295,50 +300,30 @@ class BB_H263
     void setUserPointer(void *p) { _h263.pUser = p;}
     void setPixelType(uint8_t u8Type) { _h263.u8PixelType = u8Type;} // defaults to little endian
     uint8_t getPixelType() {return _h263.u8PixelType;}
-
+    
+  protected:
+    int openInternal(void);
+    
   private:
     H263STATE _h263;
 }; // class H263
 
-// Class implementation
-int BB_H263::open(const uint8_t *pData, int iDataSize, H263_DRAW_CALLBACK *pDraw)
+int BB_H263::openInternal(void)
 {
-    _h263.H263File.pData = (uint8_t *)pData;
-    _h263.H263File.iSize = iDataSize;
-    _h263.pfnDraw = pDraw;
-    return H263_SUCCESS;
-} /* open() */
+    uint8_t *s;
+    uint32_t u32, u32VideoType = 0;
+    int i, iLen, iOffset;
+    int j, iFrame, iAudio;
+    uint32_t u32Len, u32MaxLen, iDataSize = 0;
 
-int BB_H263::open(const char *szFilename, H263_DRAW_CALLBACK *pfnDraw)
-{
-    FILE *pFile;
-    uint32_t iDataSize;
-    uint8_t *s, *pData, *pEnd;
-    uint32_t u32, u32VideoType;
-
-    if (/*!pfnDraw || */ !szFilename) return H263_INVALID_PARAMETER;
-    
-    _h263.pfnDraw = pfnDraw;
-    _h263.pfnRead = linuxRead;
-    _h263.pfnSeek = linuxSeek;
-    _h263.pfnClose = linuxClose;
-    pFile = (FILE *)linuxOpen(szFilename, &iDataSize);
-    if (!pFile) return H263_FILEIO_ERROR;
-    if (iDataSize < 4096) {
-        linuxClose(pFile);
-        return H263_INVALID_FILE;
+    iDataSize = _h263.H263File.iSize;
+    if (_h263.H263File.pData) {
+        s = _h263.H263File.pData;
+    } else {
+        s = _h263.u8FileBuf;
+        (*_h263.pfnSeek)(&_h263.H263File, 0);
+        (*_h263.pfnRead)(&_h263.H263File, s, 256);
     }
-    pData = (uint8_t *)malloc(iDataSize);
-    _h263.H263File.fHandle = pFile;
-    _h263.H263File.iPos = 0; // current file position
-    _h263.H263File.iSize = iDataSize; // file size
-    _h263.H263File.pData = pData;
-    // Debug - read the file into memory
-    linuxRead(&_h263.H263File, pData, iDataSize);
-    linuxClose(_h263.H263File.fHandle);
-    _h263.H263File.fHandle = NULL; // DEBUG - treat it as not a file
-    s = pData;
-    pEnd = &s[iDataSize];
     u32 = *(uint32_t *)&s[4]; // file size
     
     if (MOTOLONG(s) == 0x52494646 /* RIFF */ &&  u32 == (iDataSize-8) && MOTOLONG(&s[8]) == 0x41564920 /* AVI */) {
@@ -353,9 +338,9 @@ int BB_H263::open(const char *szFilename, H263_DRAW_CALLBACK *pfnDraw)
         return H263_INVALID_FILE;
     }
     if (_h263.u8FileType == H263_FILE_AVI) { // parse AVI file
-        u32VideoType = H263_parseAVI(&_h263, pData, iDataSize);
+        u32VideoType = H263_parseAVI(&_h263, s, iDataSize);
     } else {  // Parse QuickTime file
-        u32VideoType = H263_parseQT(&_h263, pData, iDataSize);
+        u32VideoType = H263_parseQT(&_h263, s, iDataSize);
     }
     // Is it H263?
     if ((u32VideoType & 0xffffff) != 0x323633 /*'x263'*/)
@@ -366,21 +351,131 @@ int BB_H263::open(const char *szFilename, H263_DRAW_CALLBACK *pfnDraw)
             _h263.iMovie += 4; // offset into the 'movie'
         }
     }
+    // Read the index list and shrink it a bit since we don't need to use 16 bytes per entry
+    _h263.pFrameList = (uint32_t *)malloc(_h263.iFrameTotal * sizeof(uint32_t));
+    _h263.pFrameLengths = (uint32_t *)malloc(_h263.iFrameTotal * sizeof(uint32_t));
+    if (_h263.iAudioLen) {
+        _h263.pAudioList = (uint32_t *)malloc((_h263.iIndexLen - (_h263.iFrameTotal*16))/4);
+    }
+    iFrame = iAudio = 0; // index output
+    (*_h263.pfnSeek)(&_h263.H263File, _h263.iIndex); // start of index
+    iLen = _h263.iIndexLen;
+    iOffset = 0;
+    if (iLen == 0) {
+        iLen = _h263.iFrameTotal*4; // Quicktime which uses atom sizes instead of offsets
+        iOffset = _h263.iMovie;
+    }
+    u32MaxLen = 0; // keep track of the biggest blob of compressed frame data
+    for (i = 0; i<iLen; i += 256) { // what fits in our temp buffer
+        (*_h263.pfnRead)(&_h263.H263File, s, 256); // read a block of data
+        if (_h263.u8FileType == H263_FILE_AVI) {
+            for (j = 0; j < 256/16; j++) {
+                u32 = _h263.iMovie + *(uint32_t *)&s[(j * 16) + 8] - 4;
+                if (s[j*16 + 2] == 'd') { // video frame
+                    if (s[(j * 16) + 4] == 0x10) { // key frame?
+                        u32 |= 0x80000000; // mark the high bit
+                    }
+                    u32Len = *(uint32_t *)&s[(j * 16) + 12];
+                    u32Len += 8; // plus chunk header
+                    _h263.pFrameLengths[iFrame] = u32Len; // AVI marker+chunk length is stored ahead of the actual data
+                    _h263.pFrameList[iFrame++] = u32;
+                    if (u32Len > u32MaxLen) u32MaxLen = u32Len;
+                } else if (s[j*16 + 2] == 'w' && _h263.pAudioList) { // audio
+                    _h263.pAudioList[iAudio++] = u32;
+                }
+                if (iFrame == _h263.iFrameTotal) {
+                    // break out of the loop
+                    j = 256; i = _h263.iIndexLen;
+                }
+            } // for j
+        } else { // Quicktime
+            for (j = 0; j < 256/4; j++) {
+                u32 = MOTOLONG(&s[(j * 4)]);
+//                        u32 |= 0x80000000; // mark the high bit for key frames
+                _h263.pFrameList[iFrame++] = u32;
+                if (iFrame == _h263.iFrameTotal) {
+                    // break out of the loop
+                    j = 256; i = _h263.iIndexLen;
+                }
+            } // for j
+        }
+    } // for i
+    if (_h263.u8FileType == H263_FILE_QT) { // Get the frame lengths (separate atom)
+        (*_h263.pfnSeek)(&_h263.H263File, _h263.iIndexSizes); // start of index of data sizes
+        iLen = _h263.iFrameTotal*4; // Quicktime which uses atom sizes instead of offsets
+        iFrame = 0;
+        for (i = 0; i<iLen; i += 256) { // what fits in our temp buffer
+            (*_h263.pfnRead)(&_h263.H263File, s, 256); // read a block of data
+            for (j = 0; j < 256/4; j++) {
+                u32 = MOTOLONG(&s[(j * 4)]);
+                _h263.pFrameLengths[iFrame++] = u32; // save the length
+                if (u32 > u32MaxLen) u32MaxLen = u32;
+                if (iFrame == _h263.iFrameTotal) {
+                    // break out of the loop
+                    j = 256; i = _h263.iIndexLen;
+                }
+            } // for j
+        } // for i
+    }
+    _h263.u32MaxFrameLength = u32MaxLen;
+    //printf("max len = %d\n", u32MaxLen);
+    _h263.pFrameData = (uint8_t *)malloc(u32MaxLen); // allocate a buffer for the compressed data
+    _h263.iAudioTotal = iAudio; // number of audio packets
     return H263_SUCCESS;
+
+} /* openInterna() */
+
+// Class implementation
+int BB_H263::open(const uint8_t *pData, int iDataSize)
+{
+    _h263.H263File.pData = (uint8_t *)pData;
+    _h263.H263File.iSize = iDataSize;
+    return openInternal();
 } /* open() */
+
+#if defined( __LINUX__ ) || defined ( __MACH__ )
+int BB_H263::open(const char *szFilename)
+{
+    FILE *pFile;
+    uint32_t iDataSize;
+    uint8_t *pData;
+    
+    if (!szFilename) return H263_INVALID_PARAMETER;
+    
+    _h263.pfnRead = linuxRead;
+    _h263.pfnSeek = linuxSeek;
+    _h263.pfnClose = linuxClose;
+    pFile = (FILE *)linuxOpen(szFilename, &iDataSize);
+    if (!pFile) return H263_FILEIO_ERROR;
+    if (iDataSize < 4096) {
+        linuxClose(pFile);
+        return H263_INVALID_FILE;
+    }
+//    pData = (uint8_t *)malloc(iDataSize);
+//    _h263.bAllocated = 1;
+    _h263.H263File.fHandle = pFile;
+    _h263.H263File.iPos = 0; // current file position
+    _h263.H263File.iSize = iDataSize; // file size
+//    _h263.H263File.pData = pData;
+    // Debug - read the file into memory
+//    linuxRead(&_h263.H263File, pData, iDataSize);
+//    linuxClose(_h263.H263File.fHandle);
+//    _h263.H263File.fHandle = NULL; // DEBUG - treat it as not a file
+    return openInternal();
+} /* open() */
+#endif // __LINUX__
 
 void BB_H263::close(void)
 {
     H263_close(&_h263);
 } /* close() */
 
-int BB_H263::open(const char *szFilename, H263_OPEN_CALLBACK *pfnOpen, H263_CLOSE_CALLBACK *pfnClose, H263_READ_CALLBACK *pfnRead, H263_SEEK_CALLBACK *pfnSeek, H263_DRAW_CALLBACK *pfnDraw)
+int BB_H263::open(const char *szFilename, H263_OPEN_CALLBACK *pfnOpen, H263_CLOSE_CALLBACK *pfnClose, H263_READ_CALLBACK *pfnRead, H263_SEEK_CALLBACK *pfnSeek)
 {
     FILE *pFile;
     uint32_t iDataSize;
     
     if (!pfnOpen || !pfnClose || !pfnRead || !pfnSeek) return H263_INVALID_PARAMETER;
-    _h263.pfnDraw = pfnDraw;
     _h263.pfnRead = pfnRead;
     _h263.pfnSeek = pfnSeek;
     _h263.pfnClose = pfnClose;
@@ -467,7 +562,8 @@ int H263_decodeFrame(H263STATE *pH263, int xoff, int yoff)
         } else { // The new position is behind or far ahead of the current read position, so we must use seek
             (*pH263->pfnSeek)(&pH263->H263File, iPos);
         }
-        s = pH263->u8FileBuf;
+//        s = pH263->u8FileBuf;
+        s = pH263->pFrameData;
         iOffset = 0;
         //printf("len = %d\n", pH263->pFrameLengths[pH263->iCurrentFrame]);
         (*pH263->pfnRead)(&pH263->H263File, s, pH263->pFrameLengths[pH263->iCurrentFrame]); // read the compressed frame
@@ -510,9 +606,14 @@ void H263_close(H263STATE *pH263) {
     if (!pH263) return;
     if (pH263->H263File.fHandle && pH263->pfnClose) {
         (*pH263->pfnClose)(pH263->H263File.fHandle);
-    } else {
+        pH263->H263File.fHandle = nullptr;
+    } else if (pH263->bAllocated){
         free(pH263->H263File.pData);
         pH263->H263File.pData = NULL;
+    }
+    if (pH263->pFrameData) {
+        free(pH263->pFrameData);
+        pH263->pFrameData = NULL;
     }
     if (pH263->usYUVRGB) {
         free(pH263->usYUVRGB);
@@ -545,17 +646,16 @@ void H263_close(H263STATE *pH263) {
 //
 uint32_t H263_parseQT(H263STATE *pH263, const uint8_t *pData, int iDataSize)
 {
-    uint8_t *s, *pEnd;
+    uint8_t *s;
     uint32_t u32, i, j, iOffset;
     uint32_t u32Chunk, u32Type, u32VideoType = 0; //, u32AudioType = 0;
     uint32_t iTimeScale = 0, iAudioTimeScale = 0, iVideoTimeScale = 0;
     
     s = (uint8_t *)pData;
     if (pH263->H263File.fHandle) { // from a file
-        pEnd = &s[256];
-        iDataSize = pH263->H263File.iSize;
+//        pEnd = &s[256];
     } else {
-        pEnd = &s[iDataSize];
+//        pEnd = &s[iDataSize];
     }
     iOffset = i = 0;
     u32Type = 0;
@@ -710,16 +810,16 @@ uint32_t H263_parseQT(H263STATE *pH263, const uint8_t *pData, int iDataSize)
 //
 uint32_t H263_parseAVI(H263STATE *pH263, const uint8_t *pData, int iDataSize)
 {
-    uint8_t *s, *pEnd;
+    uint8_t *s;
     uint32_t u32, iExtra, i, iOffset;
     uint32_t u32Chunk, u32VideoType = 0; //, u32AudioType = 0;
 
     s = (uint8_t *)pData;
     if (pH263->H263File.fHandle) { // from a file
-        pEnd = &s[256];
+ //       pEnd = &s[256];
         iDataSize = pH263->H263File.iSize;
     } else {
-        pEnd = &s[iDataSize];
+//        pEnd = &s[iDataSize];
     }
 
     i = 0;
@@ -1359,22 +1459,38 @@ const int iFrameDelta = pVideo->iFrameCX>>2;
    pD = (uint64_t *)&pDest[(x*16)+(y*16*pVideo->iFrameCX)];
    pS = (uint64_t *)pMCU;
    // copy top half
-   for (cy=0; cy<8; cy++) {
-      pD[0] = pS[0]; // top left block
-      pD[1] = pS[1];
-      pD[2] = pS[16]; // top right block
-      pD[3] = pS[17];
-      pD += iFrameDelta;
-       pS += 2;
-      }
+    for (cy=0; cy<8; cy++) {
+#ifdef HAS_NEON
+        uint64x2_t u64x2_0, u64x2_1;
+        u64x2_0 = vld1q_u64(pS); // top left
+        u64x2_1 = vld1q_u64(pS+16); // top right
+        vst1q_u64(pD, u64x2_0);
+        vst1q_u64(pD+2, u64x2_1);
+#else
+        pD[0] = pS[0]; // top left block
+        pD[1] = pS[1];
+        pD[2] = pS[16]; // top right block
+        pD[3] = pS[17];
+#endif
+        pD += iFrameDelta;
+        pS += 2;
+    }
    pD = (uint64_t *)&pDest[(x*16)+(((y*16)+8)*pVideo->iFrameCX)];
    pS = (uint64_t *)&pMCU[2*DCTSIZE2];
    // copy bottom half
    for (cy=0; cy<8; cy++) {
+#ifdef HAS_NEON
+        uint64x2_t u64x2_0, u64x2_1;
+        u64x2_0 = vld1q_u64(pS); // top left
+        u64x2_1 = vld1q_u64(pS+16); // top right
+        vst1q_u64(pD, u64x2_0);
+        vst1q_u64(pD+2, u64x2_1);
+#else
       pD[0] = pS[0]; // top left block
       pD[1] = pS[1];
       pD[2] = pS[16]; // top right block
       pD[3] = pS[17];
+#endif
       pD += iFrameDelta;
       pS += 2;
       }
@@ -1383,13 +1499,26 @@ const int iFrameDelta = pVideo->iFrameCX>>2;
       pDest = pVideo->pFRef[1+i];
       pD = (uint64_t *)&pDest[(x*8)+(y*8*(pVideo->iFrameCX>>1))];
       pS = (uint64_t *)&pMCU[(4+i)*DCTSIZE2];
+#ifdef HAS_NEON
+       for (cy=0; cy<8; cy+=2) {
+           uint64x2_t u64x2_0, u64x2_1;
+           u64x2_0 = vld1q_u64(pS);
+           u64x2_1 = vld1q_u64(pS+2);
+           vst1q_u64(pD, u64x2_0);
+           pD += iFrameDelta>>1;
+           vst1q_u64(pD, u64x2_1);
+           pD += iFrameDelta>>1;
+           pS += 4;
+       } // for cy
+#else
       for (cy=0; cy<8; cy++) {
          pD[0] = pS[0];
          pD[1] = pS[1];
          pD += iFrameDelta>>1;
          pS += 2;
-         }
-      }
+         } // for cy
+#endif
+      } // for i
 } /* H263CopyMB() */
 
 void PrepVideoStruct(H263STATE *pVideo)
@@ -1464,7 +1593,8 @@ int i, x, y, iGOBy, iErr, iOff, iLen, iBit;
 int iTrueWidth, iTrueHeight;
 uint8_t cMask, cQuant, *buf;
 uint32_t ulBits, ulCode;
-uint8_t cLevel, ucTR, ucPSBI, ucCBPY, *pCBPY;
+uint8_t cLevel, ucCBPY, *pCBPY;
+// uint8_t ucTR, ucPSBI;
 int16_t *pMCU = pVideo->MCUs, us;
 int iGOB, iGOBCount, iMB, iMBCount, iMBMax;
 char cSourceFormat, ucMBType, ucCBPC;
@@ -1595,7 +1725,7 @@ uint8_t *pTables;
         pVideo->iLastError = -1;// PIL_ERROR_DECOMP;
       goto h263z;
     }
-   ucTR = (uint8_t) (ulBits >> (24 - iBit)); // get TR (temporal reference) (8-bits)
+//   ucTR = (uint8_t) (ulBits >> (24 - iBit)); // get TR (temporal reference) (8-bits)
    iBit += 8;
    GETMOREBITS
    ulPTYPE = (ulBits >> (19-iBit)) & 0x1fff; // get PTYPE (13-bits)
@@ -1626,7 +1756,7 @@ uint8_t *pTables;
    ulCode = (ulBits >> (31-iBit)) & 1; // get CPM (1-bit)
    iBit++;
     if (ulCode) { // if CPM bit set, PSBI bits present
-      ucPSBI = (uint8_t) ((ulBits >> (30-iBit)) & 3); // get 2 PSBI bits
+//      ucPSBI = (uint8_t) ((ulBits >> (30-iBit)) & 3); // get 2 PSBI bits
       iBit += 2;
       }
    ulCode = (ulBits >> (31-iBit)) & 1; // get PEI extra insertion information (1-bit)
@@ -2077,11 +2207,12 @@ signed int lyF, lyB;
  ****************************************************************************/
 void H263MotComp(int x, int y, signed int iMV_X, signed int iMV_Y, signed short *pMCUDest, H263STATE *pVideo, int bBackward)
 {
-signed short s, *pS, *pD;
-signed int i, dx, dy, cx, cy, iType;
-signed int lx, ly, nx, ny, iWidth2;
+int16_t s, *pS, *pD;
+int32_t i, dx, dy, cx, cy, iType;
+int32_t lx, ly, nx, ny, iWidth2;
 int bCheckBorders;
-
+int iFrameCX = pVideo->iFrameCX; // keep local copy to help compiler make better code
+    
    // determine the type of pixel capture
    iType = 0;
    if (iMV_X & 1) // half-pel on X
@@ -2123,8 +2254,8 @@ int bCheckBorders;
                      {
                      nx = lx + cx;
                      if (nx < 0) nx = 0;
-                     if (nx >= pVideo->iFrameCX) nx = pVideo->iFrameCX-1;
-                     pD[cx] += pS[ny*pVideo->iFrameCX + nx];
+                     if (nx >= iFrameCX) nx = iFrameCX-1;
+                     pD[cx] += pS[ny*iFrameCX + nx];
                      if (pD[cx] > MB_UPPER) pD[cx] = MB_UPPER;
                      if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
                      }
@@ -2141,8 +2272,8 @@ int bCheckBorders;
                      {
                      nx = lx + cx;
                      if (nx < 0) nx = 0;
-                     if (nx >= pVideo->iFrameCX) nx = pVideo->iFrameCX-1;
-                     pD[cx] += ((pS[ny*pVideo->iFrameCX + nx] + pS[ny*pVideo->iFrameCX + nx + 1] + 1)>>1);  // avg left/right pixels
+                     if (nx >= iFrameCX) nx = iFrameCX-1;
+                     pD[cx] += ((pS[ny*iFrameCX + nx] + pS[ny*iFrameCX + nx + 1] + 1)>>1);  // avg left/right pixels
                      if (pD[cx] > MB_UPPER) pD[cx] = MB_UPPER;
                      if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
                      }
@@ -2159,8 +2290,8 @@ int bCheckBorders;
                      {
                      nx = lx + cx;
                      if (nx < 0) nx = 0;
-                     if (nx >= pVideo->iFrameCX) nx = pVideo->iFrameCX-1;
-                     pD[cx] += ((pS[ny*pVideo->iFrameCX + nx] + pS[(ny+1)*pVideo->iFrameCX + nx] + 1)>>1);  // avg left/right pixels
+                     if (nx >= iFrameCX) nx = iFrameCX-1;
+                     pD[cx] += ((pS[ny*iFrameCX + nx] + pS[(ny+1)*iFrameCX + nx] + 1)>>1);  // avg left/right pixels
                      if (pD[cx] > MB_UPPER) pD[cx] = MB_UPPER;
                      if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
                      }
@@ -2177,9 +2308,9 @@ int bCheckBorders;
                      {
                      nx = lx + cx;
                      if (nx < 0) nx = 0;
-                     if (nx >= pVideo->iFrameCX) nx = pVideo->iFrameCX-1;
-                     s = pS[ny*pVideo->iFrameCX + nx] + pS[ny*pVideo->iFrameCX + nx + 1]; // top 2
-                     s += pS[(ny+1)*pVideo->iFrameCX + nx] + pS[(ny+1)*pVideo->iFrameCX + nx + 1]; // bottom 2
+                     if (nx >= iFrameCX) nx = iFrameCX-1;
+                     s = pS[ny*iFrameCX + nx] + pS[ny*iFrameCX + nx + 1]; // top 2
+                     s += pS[(ny+1)*iFrameCX + nx] + pS[(ny+1)*iFrameCX + nx + 1]; // bottom 2
                      pD[cx] += ((s + 2)>>2);  // avg the 4 pixel group
                      if (pD[cx] > MB_UPPER) pD[cx] = MB_UPPER;
                      if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
@@ -2192,21 +2323,37 @@ int bCheckBorders;
       else
          { // don't check borders
          pS += (x*16)+ dx + ((i&1)<<3); // horiz address
-         pS += ((y*16) + dy + ((i&2)<<2)) * pVideo->iFrameCX;
+         pS += ((y*16) + dy + ((i&2)<<2)) * iFrameCX;
          switch (iType)
             {
             case 0: // full pel in both dirs
-               for (cy=0; cy<8; cy++)
-                  {
-                  for (cx=0; cx<8; cx++)
-                     {
+#ifdef HAS_NEON
+                {
+                    int16x8_t s16x8, d16x8;
+                    const int16x8_t upper16x8 = vdupq_n_s16(MB_UPPER);
+                    const int16x8_t lower16x8 = vdupq_n_s16(MB_LOWER);
+                    for (cy = 0; cy < 8; cy++) {
+                        s16x8 = vld1q_s16(pS);
+                        d16x8 = vld1q_s16(pD);
+                        d16x8 = vaddq_s16(d16x8, s16x8);
+                        d16x8 = vminq_s16(d16x8, upper16x8);
+                        d16x8 = vmaxq_s16(d16x8, lower16x8);
+                        vst1q_s16(pD, d16x8);
+                        pD += 8;
+                        pS += iFrameCX;
+                    } // for cy
+                }
+#else
+               for (cy=0; cy<8; cy++) {
+                  for (cx=0; cx<8; cx++) {
                      pD[cx] += pS[cx];
                      if (pD[cx] > MB_UPPER) pD[cx] = MB_UPPER;
                      if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
-                     }
+                  } // for cx
                   pD += 8;
-                  pS += pVideo->iFrameCX; // next line
-                  }
+                  pS += iFrameCX; // next line
+               } // for cy
+#endif
                break;
             case 1: // full pel Y, half-pel X
                for (cy=0; cy<8; cy++)
@@ -2218,7 +2365,7 @@ int bCheckBorders;
                      if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
                      }
                   pD += 8;
-                  pS += pVideo->iFrameCX; // next line
+                  pS += iFrameCX; // next line
                   }
                break;
             case 2: // half pel Y, full pel X
@@ -2226,28 +2373,53 @@ int bCheckBorders;
                   {
                   for (cx=0; cx<8; cx++)
                      {
-                     pD[cx] += ((pS[cx] + pS[cx + pVideo->iFrameCX] + 1)>>1);  // avg left/right pixels
+                     pD[cx] += ((pS[cx] + pS[cx + iFrameCX] + 1)>>1);  // avg left/right pixels
                      if (pD[cx] > MB_UPPER) pD[cx] = MB_UPPER;
                      if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
                      }
                   pD += 8;
-                  pS += pVideo->iFrameCX; // next line
+                  pS += iFrameCX; // next line
                   }
                break;
             case 3: // half pel Y, half pel X
-               for (cy=0; cy<8; cy++)
-                  {
-                  for (cx=0; cx<8; cx++)
-                     {
+#ifdef HAS_NEON
+                {
+                    int16x8_t s16x8_00, s16x8_10, s16x8_01, s16x8_11, d16x8;
+                    const int16x8_t upper16x8 = vdupq_n_s16(MB_UPPER);
+                    const int16x8_t lower16x8 = vdupq_n_s16(MB_LOWER);
+                    const int16x8_t two16x8 = vdupq_n_s16(2);
+                    for (cy = 0; cy < 8; cy++) {
+                        d16x8 = vld1q_s16(pD);
+                        s16x8_00 = vld1q_s16(pS);
+                        s16x8_10 = vld1q_s16(pS+1);
+                        s16x8_01 = vld1q_s16(pS+iFrameCX);
+                        s16x8_11 = vld1q_s16(pS+1+iFrameCX);
+                        s16x8_00 = vaddq_s16(s16x8_00, s16x8_10); // add horizontally
+                        s16x8_01 = vaddq_s16(s16x8_01, s16x8_11);
+                        s16x8_00 = vaddq_s16(s16x8_00, s16x8_01); // add vertically
+                        s16x8_00 = vaddq_s16(s16x8_00, two16x8); // round up
+                        s16x8_00 = vshrq_n_s16(s16x8_00, 2); // average all together
+                        d16x8 = vaddq_s16(d16x8, s16x8_00);
+                        d16x8 = vminq_s16(d16x8, upper16x8);
+                        d16x8 = vmaxq_s16(d16x8, lower16x8);
+                        vst1q_s16(pD, d16x8);
+                        pD += 8;
+                        pS += iFrameCX;
+                    } // for cy
+                }
+#else
+               for (cy=0; cy<8; cy++) {
+                  for (cx=0; cx<8; cx++) {
                      s = pS[cx] + pS[cx + 1]; // top 2
-                     s += pS[cx + pVideo->iFrameCX] + pS[cx + 1 + pVideo->iFrameCX]; // bottom 2
+                     s += pS[cx + iFrameCX] + pS[cx + 1 + iFrameCX]; // bottom 2
                      pD[cx] += ((s + 2)>>2);  // avg the 4 pixel group
                      if (pD[cx] > MB_UPPER) pD[cx] = MB_UPPER;
                      if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
-                     }
+                     } // for cx
                   pD += 8;
-                  pS += pVideo->iFrameCX; // next line
-                  }
+                  pS += iFrameCX; // next line
+                  } // for cy
+#endif
                break;
             } // switch on MV type
          }
@@ -2263,10 +2435,10 @@ int bCheckBorders;
    dy = (iMV_Y >> 2);
 
    // See if it overlaps any edge of the picture
-   iWidth2 = (pVideo->iFrameCX>>1);
+   iWidth2 = (iFrameCX>>1);
    bCheckBorders = 1;
    if ((x<<3)+dx >= 0 && (y<<3)+dy >= 0 &&
-      (x<<3)+dx+7 < (pVideo->iFrameCX>>1) && (y<<3)+dy+7 < (pVideo->iFrameCY>>1))
+      (x<<3)+dx+7 < (iFrameCX>>1) && (y<<3)+dy+7 < (pVideo->iFrameCY>>1))
       { // we can do it faster if we don't have to test each pixel
       bCheckBorders = 0;
       }
@@ -2368,17 +2540,33 @@ int bCheckBorders;
          switch (iType)
             {
             case 0: // full pel x,y
-               for (cy=0; cy<8; cy++)
-                  {
-                  for (cx=0; cx<8; cx++)
-                     {
+#ifdef HAS_NEON
+                {
+                    int16x8_t s16x8, d16x8;
+                    const int16x8_t upper16x8 = vdupq_n_s16(MB_UPPER);
+                    const int16x8_t lower16x8 = vdupq_n_s16(MB_LOWER);
+                    for (cy = 0; cy < 8; cy++) {
+                        s16x8 = vld1q_s16(pS);
+                        d16x8 = vld1q_s16(pD);
+                        d16x8 = vaddq_s16(d16x8, s16x8);
+                        d16x8 = vminq_s16(d16x8, upper16x8);
+                        d16x8 = vmaxq_s16(d16x8, lower16x8);
+                        vst1q_s16(pD, d16x8);
+                        pD += 8;
+                        pS += iWidth2;
+                    } // for cy
+                }
+#else
+               for (cy=0; cy<8; cy++) {
+                  for (cx=0; cx<8; cx++) {
                      pD[cx] += pS[cx];
                      if (pD[cx] > MB_UPPER) pD[cx] = MB_UPPER;
                      if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
-                     }
+                  } // for cx
                   pD += 8;
                   pS += iWidth2; // next line
-                  }
+               } // for cy
+#endif
                break;
             case 1: // half pel x, full pel y
                for (cy=0; cy<8; cy++)

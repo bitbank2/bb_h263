@@ -26,6 +26,10 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(__arm64__) || defined(__aarch64__)
+#include <arm_neon.h>
+#define HAS_NEON
+#endif
 
 #define DCTSIZE2 64
 #define MB_LOWER -2048
@@ -1318,7 +1322,10 @@ int iMaxCol, iMaxRow;
 uint16_t usIndex;
 const int iPitch = pVideo->iFramePitch;
 const int iPitch32 = iPitch/4; // pitch in uint32_t's
-    
+#ifdef HAS_NEON
+// 16-bit constants for NEON ycc->rgb conversion
+static const int16_t __attribute__((aligned(16))) sYCCRGBConstants[4] = {5742/2, -2925/2, -1409/2, 7258/2};
+#endif
 //    if (pVideo->iOptions & PIL_CONVERT_16BPP)
 //       lsize >>= 2; // for longs
 
@@ -1333,6 +1340,108 @@ const int iPitch32 = iPitch/4; // pitch in uint32_t's
       iMaxRow = (pVideo->iHeight/2) & 7;
    if ((x+1)*16 > pVideo->iWidth)
       iMaxCol = (pVideo->iWidth/2) & 7;
+#ifdef HAS_NEON
+    const int16x4_t i164Constants = vld1_s16(&sYCCRGBConstants[0]); // 4 different constants used for "lane" multiplications by scalar
+    const int16x8_t p16 = vdupq_n_s16(16);
+    const int16x8_t p128 = vdupq_n_s16(-0x8000);
+    int16x8x2_t cr16x8x2, cb16x8x2;
+    int16x8_t cb16x8, cr16x8, cg16x8, y00_16x8, y01_16x8, y10_16x8, y11_16x8;
+    int16x8_t iCBB, iCBG, iCRG, iCRR;
+    uint8x8_t u88B, u88R, u88G;
+    uint16x8_t u168Temp, u168Temp2;
+    pY = (int16_t *)&pMCU[MCU0];
+       for (iRow=0; iRow<=iMaxRow; iRow++) { // do 8 rows
+           cr16x8 = vld1q_s16(pCr); // load 1 row of Cr
+           cb16x8 = vld1q_s16(pCb); // load 1 row of Cb
+           y00_16x8 = vld1q_s16(pY); // load top row of Y (left block)
+           y10_16x8 = vld1q_s16(pY+64); // load top row of Y (right block)
+           y01_16x8 = vld1q_s16(pY+8); // load bottom row of Y (left block)
+           y11_16x8 = vld1q_s16(pY+64+8); // load bottom row of Y (right block)
+           cr16x8 = vshlq_n_s16(cr16x8, 8); // ready for mult-take-high-part
+           cb16x8 = vshlq_n_s16(cb16x8, 8);
+           cr16x8 = vaddq_s16(cr16x8, p128); // -128
+           cb16x8 = vaddq_s16(cb16x8, p128);
+           y00_16x8 = vsubq_s16(y00_16x8, p16); // - 16
+           y10_16x8 = vsubq_s16(y10_16x8, p16);
+           y01_16x8 = vsubq_s16(y01_16x8, p16); // - 16
+           y11_16x8 = vsubq_s16(y11_16x8, p16);
+           y00_16x8 = vshlq_n_s16(y00_16x8, 4); // adjust scale of Y to match cr/cb
+           y10_16x8 = vshlq_n_s16(y10_16x8, 4);
+           y01_16x8 = vshlq_n_s16(y01_16x8, 4);
+           y11_16x8 = vshlq_n_s16(y11_16x8, 4);
+           cr16x8x2 = vzipq_s16(cr16x8, cr16x8); // double each cr
+           cb16x8x2 = vzipq_s16(cb16x8, cb16x8); // double each cb
+       // top row of left block
+           iCBB = vqdmulhq_lane_s16(cb16x8x2.val[0], i164Constants, 0);
+           iCBG = vqdmulhq_lane_s16(cb16x8x2.val[0], i164Constants, 1);
+           iCRG = vqdmulhq_lane_s16(cr16x8x2.val[0], i164Constants, 2);
+           iCRR = vqdmulhq_lane_s16(cr16x8x2.val[0], i164Constants, 3);
+           cb16x8 = vaddq_s16(iCBB, y00_16x8); // left 8 blue pixels
+           cg16x8 = vaddq_s16(y00_16x8, iCBG);
+           cg16x8 = vaddq_s16(cg16x8, iCRG); // left 8 green pixels
+           cr16x8 = vaddq_s16(y00_16x8, iCRR); // left 8 red pixels
+           u88R = vqrshrun_n_s16(cr16x8, 4); // shift right, narrow and saturate to 8-bit unsigned
+           u168Temp = vshll_n_u8(u88R, 8); // place red in upper part of 16-bit words
+           u88B = vqrshrun_n_s16(cb16x8, 4); // shift right, narrow and saturate to 8-bit unsigned
+           u88G = vqrshrun_n_s16(cg16x8, 4); // shift right, narrow and saturate to 8-bit unsigned
+           u168Temp2 = vshll_n_u8(u88G, 8); // shift green elements to top of 16-bit words
+           u168Temp = vsriq_n_u16(u168Temp, u168Temp2, 5); // shift green elements right and insert red elements
+           u168Temp2 = vshll_n_u8(u88B, 8); // shift blue elements to top of 16-bit words
+           u168Temp = vsriq_n_u16(u168Temp, u168Temp2, 11); // shift blue elements right and inserted into bottom 5 bits
+           vst1q_u16((uint16_t *)ulDest, u168Temp);
+           // second row of left block
+           cb16x8 = vaddq_s16(iCBB, y01_16x8); // left 8 blue pixels
+           cg16x8 = vaddq_s16(y01_16x8, iCBG);
+           cg16x8 = vaddq_s16(cg16x8, iCRG); // left 8 green pixels
+           cr16x8 = vaddq_s16(y01_16x8, iCRR); // left 8 red pixels
+           u88R = vqrshrun_n_s16(cr16x8, 4); // shift right, narrow and saturate to 8-bit unsigned
+           u168Temp = vshll_n_u8(u88R, 8); // place red in upper part of 16-bit words
+           u88B = vqrshrun_n_s16(cb16x8, 4); // shift right, narrow and saturate to 8-bit unsigned
+           u88G = vqrshrun_n_s16(cg16x8, 4); // shift right, narrow and saturate to 8-bit unsigned
+           u168Temp2 = vshll_n_u8(u88G, 8); // shift green elements to top of 16-bit words
+           u168Temp = vsriq_n_u16(u168Temp, u168Temp2, 5); // shift green elements right and insert red elements
+           u168Temp2 = vshll_n_u8(u88B, 8); // shift blue elements to top of 16-bit words
+           u168Temp = vsriq_n_u16(u168Temp, u168Temp2, 11); // shift blue elements right and inserted into bottom 5 bits
+           vst1q_u16((uint16_t *)ulDest + iPitch/2, u168Temp);
+           // top row of right block
+           iCBB = vqdmulhq_lane_s16(cb16x8x2.val[1], i164Constants, 0);
+           iCBG = vqdmulhq_lane_s16(cb16x8x2.val[1], i164Constants, 1);
+           iCRG = vqdmulhq_lane_s16(cr16x8x2.val[1], i164Constants, 2);
+           iCRR = vqdmulhq_lane_s16(cr16x8x2.val[1], i164Constants, 3);
+           cb16x8 = vaddq_s16(iCBB, y10_16x8); // left 8 blue pixels
+           cg16x8 = vaddq_s16(y10_16x8, iCBG);
+           cg16x8 = vaddq_s16(cg16x8, iCRG); // left 8 green pixels
+           cr16x8 = vaddq_s16(y10_16x8, iCRR); // left 8 red pixels
+           u88R = vqrshrun_n_s16(cr16x8, 4); // shift right, narrow and saturate to 8-bit unsigned
+           u168Temp = vshll_n_u8(u88R, 8); // place red in upper part of 16-bit words
+           u88B = vqrshrun_n_s16(cb16x8, 4); // shift right, narrow and saturate to 8-bit unsigned
+           u88G = vqrshrun_n_s16(cg16x8, 4); // shift right, narrow and saturate to 8-bit unsigned
+           u168Temp2 = vshll_n_u8(u88G, 8); // shift green elements to top of 16-bit words
+           u168Temp = vsriq_n_u16(u168Temp, u168Temp2, 5); // shift green elements right and insert red elements
+           u168Temp2 = vshll_n_u8(u88B, 8); // shift blue elements to top of 16-bit words
+           u168Temp = vsriq_n_u16(u168Temp, u168Temp2, 11); // shift blue elements right and inserted into bottom 5 bits
+           vst1q_u16((uint16_t *)ulDest + 8, u168Temp);
+           // second row of right block
+           cb16x8 = vaddq_s16(iCBB, y11_16x8); // left 8 blue pixels
+           cg16x8 = vaddq_s16(y11_16x8, iCBG);
+           cg16x8 = vaddq_s16(cg16x8, iCRG); // left 8 green pixels
+           cr16x8 = vaddq_s16(y11_16x8, iCRR); // left 8 red pixels
+           u88R = vqrshrun_n_s16(cr16x8, 4); // shift right, narrow and saturate to 8-bit unsigned
+           u168Temp = vshll_n_u8(u88R, 8); // place red in upper part of 16-bit words
+           u88B = vqrshrun_n_s16(cb16x8, 4); // shift right, narrow and saturate to 8-bit unsigned
+           u88G = vqrshrun_n_s16(cg16x8, 4); // shift right, narrow and saturate to 8-bit unsigned
+           u168Temp2 = vshll_n_u8(u88G, 8); // shift green elements to top of 16-bit words
+           u168Temp = vsriq_n_u16(u168Temp, u168Temp2, 5); // shift green elements right and insert red elements
+           u168Temp2 = vshll_n_u8(u88B, 8); // shift blue elements to top of 16-bit words
+           u168Temp = vsriq_n_u16(u168Temp, u168Temp2, 11); // shift blue elements right and inserted into bottom 5 bits
+           vst1q_u16((uint16_t *)ulDest + 8 + iPitch/2, u168Temp);
+           pCr += 8; pCb += 8; pY += 16; // next pair of rows
+           ulDest += iPitch/2;
+           if (iRow == 3) { // halfway down, switch to next 2 MCUs
+               pY += 64;
+           }
+        } // for each row
+#else
    for (iRow=0; iRow <= iMaxRow; iRow++) {
        pY = (signed short *)&pMCU[MCU0 + iRowOffsets[iRow]];
        for (iCol=0; iCol<=iMaxCol; iCol++) {
@@ -1374,6 +1483,7 @@ const int iPitch32 = iPitch/4; // pitch in uint32_t's
       ulDest -= (iMaxCol+1); // pull back 16 pixels
       ulDest += iPitch32*2; // next pair of lines of dest pixels
       } // for each row
+#endif
 } /* H263PutMCU22() */
 
 #define GETMOREBITS if (iBit >= 16) {iBit -= 16; ulBits <<= 16; ulBits |= MOTOSHORT(&buf[iOff]); iOff += 2;}
@@ -1455,22 +1565,38 @@ const int iFrameDelta = pVideo->iFrameCX>>2;
    pD = (uint64_t *)&pDest[(x*16)+(y*16*pVideo->iFrameCX)];
    pS = (uint64_t *)pMCU;
    // copy top half
-   for (cy=0; cy<8; cy++) {
-      pD[0] = pS[0]; // top left block
-      pD[1] = pS[1];
-      pD[2] = pS[16]; // top right block
-      pD[3] = pS[17];
-      pD += iFrameDelta;
-       pS += 2;
-      }
+    for (cy=0; cy<8; cy++) {
+#ifdef HAS_NEON
+        uint64x2_t u64x2_0, u64x2_1;
+        u64x2_0 = vld1q_u64(pS); // top left
+        u64x2_1 = vld1q_u64(pS+16); // top right
+        vst1q_u64(pD, u64x2_0);
+        vst1q_u64(pD+2, u64x2_1);
+#else
+        pD[0] = pS[0]; // top left block
+        pD[1] = pS[1];
+        pD[2] = pS[16]; // top right block
+        pD[3] = pS[17];
+#endif
+        pD += iFrameDelta;
+        pS += 2;
+    }
    pD = (uint64_t *)&pDest[(x*16)+(((y*16)+8)*pVideo->iFrameCX)];
    pS = (uint64_t *)&pMCU[2*DCTSIZE2];
    // copy bottom half
    for (cy=0; cy<8; cy++) {
+#ifdef HAS_NEON
+        uint64x2_t u64x2_0, u64x2_1;
+        u64x2_0 = vld1q_u64(pS); // top left
+        u64x2_1 = vld1q_u64(pS+16); // top right
+        vst1q_u64(pD, u64x2_0);
+        vst1q_u64(pD+2, u64x2_1);
+#else
       pD[0] = pS[0]; // top left block
       pD[1] = pS[1];
       pD[2] = pS[16]; // top right block
       pD[3] = pS[17];
+#endif
       pD += iFrameDelta;
       pS += 2;
       }
@@ -1479,13 +1605,26 @@ const int iFrameDelta = pVideo->iFrameCX>>2;
       pDest = pVideo->pFRef[1+i];
       pD = (uint64_t *)&pDest[(x*8)+(y*8*(pVideo->iFrameCX>>1))];
       pS = (uint64_t *)&pMCU[(4+i)*DCTSIZE2];
+#ifdef HAS_NEON
+       for (cy=0; cy<8; cy+=2) {
+           uint64x2_t u64x2_0, u64x2_1;
+           u64x2_0 = vld1q_u64(pS);
+           u64x2_1 = vld1q_u64(pS+2);
+           vst1q_u64(pD, u64x2_0);
+           pD += iFrameDelta>>1;
+           vst1q_u64(pD, u64x2_1);
+           pD += iFrameDelta>>1;
+           pS += 4;
+       } // for cy
+#else
       for (cy=0; cy<8; cy++) {
          pD[0] = pS[0];
          pD[1] = pS[1];
          pD += iFrameDelta>>1;
          pS += 2;
-         }
-      }
+         } // for cy
+#endif
+      } // for i
 } /* H263CopyMB() */
 
 void PrepVideoStruct(H263STATE *pVideo)
@@ -1972,13 +2111,13 @@ int bLast;
               ulBits |= MOTOSHORT(&buf[iOff]);
               iOff += 2;
           }
-          ulCode = (ulBits >> (19-iBit)) & 0x1fff; // get 13-bits
-          ulVal = pTable[ulCode*2]; // get the bit value
+          ulCode = (ulBits >> (18-iBit)) & 0x3ffe; // get 13-bits, shifted left by 1 to index shorts
+          ulVal = pTable[ulCode]; // get the bit value
           if (ulVal == 0) { // invalid code
               pVideo->iLastError = H263_DECODE_ERROR;
               return -1;
           }
-         iBit += pTable[(ulCode & 0x1ffe)*2 + 1]; // get the true length
+          iBit += pTable[(ulCode & 0x3ffc)+1]; //(ulCode & 0x1ffe)*2 + 1]; // get the true length
           if (ulVal == 0xffffffff) { // special ESCAPE code
               if (iBit >= 16) { // we need 15 bits
                   iBit -= 16;
@@ -2174,11 +2313,12 @@ signed int lyF, lyB;
  ****************************************************************************/
 void H263MotComp(int x, int y, signed int iMV_X, signed int iMV_Y, signed short *pMCUDest, H263STATE *pVideo, int bBackward)
 {
-signed short s, *pS, *pD;
-signed int i, dx, dy, cx, cy, iType;
-signed int lx, ly, nx, ny, iWidth2;
+int16_t s, *pS, *pD;
+int32_t i, dx, dy, cx, cy, iType;
+int32_t lx, ly, nx, ny, iWidth2;
 int bCheckBorders;
-
+int iFrameCX = pVideo->iFrameCX; // keep local copy to help compiler make better code
+    
    // determine the type of pixel capture
    iType = 0;
    if (iMV_X & 1) // half-pel on X
@@ -2220,10 +2360,10 @@ int bCheckBorders;
                      {
                      nx = lx + cx;
                      if (nx < 0) nx = 0;
-                     if (nx >= pVideo->iFrameCX) nx = pVideo->iFrameCX-1;
-                     pD[cx] += pS[ny*pVideo->iFrameCX + nx];
+                     if (nx >= iFrameCX) nx = iFrameCX-1;
+                     pD[cx] += pS[ny*iFrameCX + nx];
                      if (pD[cx] > MB_UPPER) pD[cx] = MB_UPPER;
-                     if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
+                     else if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
                      }
                   pD += 8;
                   }
@@ -2238,10 +2378,10 @@ int bCheckBorders;
                      {
                      nx = lx + cx;
                      if (nx < 0) nx = 0;
-                     if (nx >= pVideo->iFrameCX) nx = pVideo->iFrameCX-1;
-                     pD[cx] += ((pS[ny*pVideo->iFrameCX + nx] + pS[ny*pVideo->iFrameCX + nx + 1] + 1)>>1);  // avg left/right pixels
+                     if (nx >= iFrameCX) nx = iFrameCX-1;
+                     pD[cx] += ((pS[ny*iFrameCX + nx] + pS[ny*iFrameCX + nx + 1] + 1)>>1);  // avg left/right pixels
                      if (pD[cx] > MB_UPPER) pD[cx] = MB_UPPER;
-                     if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
+                     else if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
                      }
                   pD += 8;
                   }
@@ -2256,10 +2396,10 @@ int bCheckBorders;
                      {
                      nx = lx + cx;
                      if (nx < 0) nx = 0;
-                     if (nx >= pVideo->iFrameCX) nx = pVideo->iFrameCX-1;
-                     pD[cx] += ((pS[ny*pVideo->iFrameCX + nx] + pS[(ny+1)*pVideo->iFrameCX + nx] + 1)>>1);  // avg left/right pixels
+                     if (nx >= iFrameCX) nx = iFrameCX-1;
+                     pD[cx] += ((pS[ny*iFrameCX + nx] + pS[(ny+1)*iFrameCX + nx] + 1)>>1);  // avg left/right pixels
                      if (pD[cx] > MB_UPPER) pD[cx] = MB_UPPER;
-                     if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
+                     else if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
                      }
                   pD += 8;
                   }
@@ -2274,12 +2414,12 @@ int bCheckBorders;
                      {
                      nx = lx + cx;
                      if (nx < 0) nx = 0;
-                     if (nx >= pVideo->iFrameCX) nx = pVideo->iFrameCX-1;
-                     s = pS[ny*pVideo->iFrameCX + nx] + pS[ny*pVideo->iFrameCX + nx + 1]; // top 2
-                     s += pS[(ny+1)*pVideo->iFrameCX + nx] + pS[(ny+1)*pVideo->iFrameCX + nx + 1]; // bottom 2
+                     if (nx >= iFrameCX) nx = iFrameCX-1;
+                     s = pS[ny*iFrameCX + nx] + pS[ny*iFrameCX + nx + 1]; // top 2
+                     s += pS[(ny+1)*iFrameCX + nx] + pS[(ny+1)*iFrameCX + nx + 1]; // bottom 2
                      pD[cx] += ((s + 2)>>2);  // avg the 4 pixel group
                      if (pD[cx] > MB_UPPER) pD[cx] = MB_UPPER;
-                     if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
+                     else if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
                      }
                   pD += 8;
                   }
@@ -2289,62 +2429,151 @@ int bCheckBorders;
       else
          { // don't check borders
          pS += (x*16)+ dx + ((i&1)<<3); // horiz address
-         pS += ((y*16) + dy + ((i&2)<<2)) * pVideo->iFrameCX;
+         pS += ((y*16) + dy + ((i&2)<<2)) * iFrameCX;
          switch (iType)
             {
             case 0: // full pel in both dirs
-               for (cy=0; cy<8; cy++)
-                  {
-                  for (cx=0; cx<8; cx++)
-                     {
+#ifdef HAS_NEON
+                {
+                    int16x8_t s16x8_0, s16x8_1, d16x8_0, d16x8_1;
+                    const int16x8_t upper16x8 = vdupq_n_s16(MB_UPPER);
+                    const int16x8_t lower16x8 = vdupq_n_s16(MB_LOWER);
+                    for (cy = 0; cy < 8; cy+=2) {
+                        s16x8_0 = vld1q_s16(pS);
+                        d16x8_0 = vld1q_s16(pD);
+                        s16x8_1 = vld1q_s16(pS+iFrameCX);
+                        d16x8_1 = vld1q_s16(pD+8);
+                        d16x8_0 = vaddq_s16(d16x8_0, s16x8_0);
+                        d16x8_1 = vaddq_s16(d16x8_1, s16x8_1);
+                        d16x8_0 = vminq_s16(d16x8_0, upper16x8);
+                        d16x8_1 = vminq_s16(d16x8_1, upper16x8);
+                        d16x8_0 = vmaxq_s16(d16x8_0, lower16x8);
+                        d16x8_1 = vmaxq_s16(d16x8_1, lower16x8);
+                        vst1q_s16(pD, d16x8_0);
+                        vst1q_s16(pD+8, d16x8_1);
+                        pD += 16;
+                        pS += iFrameCX*2;
+                    } // for cy
+                }
+#else
+               for (cy=0; cy<8; cy++) {
+                  for (cx=0; cx<8; cx++) {
                      pD[cx] += pS[cx];
                      if (pD[cx] > MB_UPPER) pD[cx] = MB_UPPER;
-                     if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
-                     }
+                     else if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
+                  } // for cx
                   pD += 8;
-                  pS += pVideo->iFrameCX; // next line
-                  }
+                  pS += iFrameCX; // next line
+               } // for cy
+#endif
                break;
             case 1: // full pel Y, half-pel X
-               for (cy=0; cy<8; cy++)
-                  {
-                  for (cx=0; cx<8; cx++)
-                     {
+#ifdef HAS_NEON
+                {
+                    int16x8_t s16x8_0, s16x8_1, d16x8;
+                    const int16x8_t upper16x8 = vdupq_n_s16(MB_UPPER);
+                    const int16x8_t lower16x8 = vdupq_n_s16(MB_LOWER);
+                    const int16x8_t one16x8 = vdupq_n_s16(1);
+                    for (cy = 0; cy < 8; cy++) {
+                        s16x8_0 = vld1q_s16(pS);
+                        s16x8_1 = vld1q_s16(pS+1);
+                        d16x8 = vld1q_s16(pD);
+                        s16x8_0 = vaddq_s16(s16x8_0, s16x8_1); // horizontal sum
+                        s16x8_0 = vaddq_s16(s16x8_0, one16x8);
+                        s16x8_0 = vshrq_n_s16(s16x8_0, 1); // average with rounding up
+                        d16x8 = vaddq_s16(d16x8, s16x8_0);
+                        d16x8 = vminq_s16(d16x8, upper16x8);
+                        d16x8 = vmaxq_s16(d16x8, lower16x8);
+                        vst1q_s16(pD, d16x8);
+                        pD += 8;
+                        pS += iFrameCX;
+                    } // for cy
+                }
+#else
+               for (cy=0; cy<8; cy++) {
+                  for (cx=0; cx<8; cx++) {
                      pD[cx] += ((pS[cx] + pS[cx + 1] + 1)>>1);  // avg left/right pixels
                      if (pD[cx] > MB_UPPER) pD[cx] = MB_UPPER;
-                     if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
-                     }
+                     else if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
+                     } // for cx
                   pD += 8;
-                  pS += pVideo->iFrameCX; // next line
-                  }
+                  pS += iFrameCX; // next line
+                  } // for cy
+#endif
                break;
             case 2: // half pel Y, full pel X
-               for (cy=0; cy<8; cy++)
-                  {
-                  for (cx=0; cx<8; cx++)
-                     {
-                     pD[cx] += ((pS[cx] + pS[cx + pVideo->iFrameCX] + 1)>>1);  // avg left/right pixels
+#ifdef HAS_NEON
+                {
+                    int16x8_t s16x8_0, s16x8_1, d16x8;
+                    const int16x8_t upper16x8 = vdupq_n_s16(MB_UPPER);
+                    const int16x8_t lower16x8 = vdupq_n_s16(MB_LOWER);
+                    const int16x8_t one16x8 = vdupq_n_s16(1);
+                    for (cy = 0; cy < 8; cy++) {
+                        s16x8_0 = vld1q_s16(pS);
+                        s16x8_1 = vld1q_s16(pS+iFrameCX);
+                        d16x8 = vld1q_s16(pD);
+                        s16x8_0 = vaddq_s16(s16x8_0, s16x8_1); // vertical sum
+                        s16x8_0 = vaddq_s16(s16x8_0, one16x8);
+                        s16x8_0 = vshrq_n_s16(s16x8_0, 1); // average with rounding up
+                        d16x8 = vaddq_s16(d16x8, s16x8_0);
+                        d16x8 = vminq_s16(d16x8, upper16x8);
+                        d16x8 = vmaxq_s16(d16x8, lower16x8);
+                        vst1q_s16(pD, d16x8);
+                        pD += 8;
+                        pS += iFrameCX;
+                    } // for cy
+                }
+#else
+               for (cy=0; cy<8; cy++) {
+                  for (cx=0; cx<8; cx++) {
+                     pD[cx] += ((pS[cx] + pS[cx + iFrameCX] + 1)>>1);  // avg left/right pixels
                      if (pD[cx] > MB_UPPER) pD[cx] = MB_UPPER;
-                     if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
-                     }
+                     else if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
+                     } // for cx
                   pD += 8;
-                  pS += pVideo->iFrameCX; // next line
-                  }
+                  pS += iFrameCX; // next line
+                  } // for cy
+#endif
                break;
             case 3: // half pel Y, half pel X
-               for (cy=0; cy<8; cy++)
-                  {
-                  for (cx=0; cx<8; cx++)
-                     {
+#ifdef HAS_NEON
+                {
+                    int16x8_t s16x8_00, s16x8_10, s16x8_01, s16x8_11, d16x8;
+                    const int16x8_t upper16x8 = vdupq_n_s16(MB_UPPER);
+                    const int16x8_t lower16x8 = vdupq_n_s16(MB_LOWER);
+                    const int16x8_t two16x8 = vdupq_n_s16(2);
+                    for (cy = 0; cy < 8; cy++) {
+                        d16x8 = vld1q_s16(pD);
+                        s16x8_00 = vld1q_s16(pS);
+                        s16x8_10 = vld1q_s16(pS+1);
+                        s16x8_01 = vld1q_s16(pS+iFrameCX);
+                        s16x8_11 = vld1q_s16(pS+1+iFrameCX);
+                        s16x8_00 = vaddq_s16(s16x8_00, s16x8_10); // add horizontally
+                        s16x8_01 = vaddq_s16(s16x8_01, s16x8_11);
+                        s16x8_00 = vaddq_s16(s16x8_00, s16x8_01); // add vertically
+                        s16x8_00 = vaddq_s16(s16x8_00, two16x8); // round up
+                        s16x8_00 = vshrq_n_s16(s16x8_00, 2); // average all together
+                        d16x8 = vaddq_s16(d16x8, s16x8_00);
+                        d16x8 = vminq_s16(d16x8, upper16x8);
+                        d16x8 = vmaxq_s16(d16x8, lower16x8);
+                        vst1q_s16(pD, d16x8);
+                        pD += 8;
+                        pS += iFrameCX;
+                    } // for cy
+                }
+#else
+               for (cy=0; cy<8; cy++) {
+                  for (cx=0; cx<8; cx++) {
                      s = pS[cx] + pS[cx + 1]; // top 2
-                     s += pS[cx + pVideo->iFrameCX] + pS[cx + 1 + pVideo->iFrameCX]; // bottom 2
+                     s += pS[cx + iFrameCX] + pS[cx + 1 + iFrameCX]; // bottom 2
                      pD[cx] += ((s + 2)>>2);  // avg the 4 pixel group
                      if (pD[cx] > MB_UPPER) pD[cx] = MB_UPPER;
-                     if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
-                     }
+                     else if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
+                     } // for cx
                   pD += 8;
-                  pS += pVideo->iFrameCX; // next line
-                  }
+                  pS += iFrameCX; // next line
+                  } // for cy
+#endif
                break;
             } // switch on MV type
          }
@@ -2360,10 +2589,10 @@ int bCheckBorders;
    dy = (iMV_Y >> 2);
 
    // See if it overlaps any edge of the picture
-   iWidth2 = (pVideo->iFrameCX>>1);
+   iWidth2 = (iFrameCX>>1);
    bCheckBorders = 1;
    if ((x<<3)+dx >= 0 && (y<<3)+dy >= 0 &&
-      (x<<3)+dx+7 < (pVideo->iFrameCX>>1) && (y<<3)+dy+7 < (pVideo->iFrameCY>>1))
+      (x<<3)+dx+7 < (iFrameCX>>1) && (y<<3)+dy+7 < (pVideo->iFrameCY>>1))
       { // we can do it faster if we don't have to test each pixel
       bCheckBorders = 0;
       }
@@ -2395,7 +2624,7 @@ int bCheckBorders;
                      if (nx >= iWidth2) nx = iWidth2-1;
                      pD[cx] += pS[ny*iWidth2 + nx];
                      if (pD[cx] > MB_UPPER) pD[cx] = MB_UPPER;
-                     if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
+                     else if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
                      }
                   pD += 8;
                   }
@@ -2413,7 +2642,7 @@ int bCheckBorders;
                      if (nx >= iWidth2) nx = iWidth2-1;
                      pD[cx] += ((pS[ny*iWidth2 + nx] + pS[ny*iWidth2 + nx + 1])>>1);
                      if (pD[cx] > MB_UPPER) pD[cx] = MB_UPPER;
-                     if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
+                     else if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
                      }
                   pD += 8;
                   }
@@ -2431,7 +2660,7 @@ int bCheckBorders;
                      if (nx >= iWidth2) nx = iWidth2-1;
                      pD[cx] += ((pS[ny*iWidth2 + nx] + pS[(ny+1)*iWidth2 + nx])>>1);
                      if (pD[cx] > MB_UPPER) pD[cx] = MB_UPPER;
-                     if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
+                     else if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
                      }
                   pD += 8;
                   }
@@ -2451,7 +2680,7 @@ int bCheckBorders;
                      s += pS[(ny+1)*iWidth2 + nx] + pS[(ny+1)*iWidth2 + nx + 1]; // bottom 2
                      pD[cx] += ((s + 2)>>2);  // avg the 4 pixel group
                      if (pD[cx] > MB_UPPER) pD[cx] = MB_UPPER;
-                     if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
+                     else if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
                      }
                   pD += 8;
                   }
@@ -2465,17 +2694,33 @@ int bCheckBorders;
          switch (iType)
             {
             case 0: // full pel x,y
-               for (cy=0; cy<8; cy++)
-                  {
-                  for (cx=0; cx<8; cx++)
-                     {
+#ifdef HAS_NEON
+                {
+                    int16x8_t s16x8, d16x8;
+                    const int16x8_t upper16x8 = vdupq_n_s16(MB_UPPER);
+                    const int16x8_t lower16x8 = vdupq_n_s16(MB_LOWER);
+                    for (cy = 0; cy < 8; cy++) {
+                        s16x8 = vld1q_s16(pS);
+                        d16x8 = vld1q_s16(pD);
+                        d16x8 = vaddq_s16(d16x8, s16x8);
+                        d16x8 = vminq_s16(d16x8, upper16x8);
+                        d16x8 = vmaxq_s16(d16x8, lower16x8);
+                        vst1q_s16(pD, d16x8);
+                        pD += 8;
+                        pS += iWidth2;
+                    } // for cy
+                }
+#else
+               for (cy=0; cy<8; cy++) {
+                  for (cx=0; cx<8; cx++) {
                      pD[cx] += pS[cx];
                      if (pD[cx] > MB_UPPER) pD[cx] = MB_UPPER;
-                     if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
-                     }
+                     else if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
+                  } // for cx
                   pD += 8;
                   pS += iWidth2; // next line
-                  }
+               } // for cy
+#endif
                break;
             case 1: // half pel x, full pel y
                for (cy=0; cy<8; cy++)
@@ -2484,7 +2729,7 @@ int bCheckBorders;
                      {
                      pD[cx] += ((pS[cx] + pS[cx + 1])>>1);
                      if (pD[cx] > MB_UPPER) pD[cx] = MB_UPPER;
-                     if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
+                     else if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
                      }
                   pD += 8;
                   pS += iWidth2; // next line
@@ -2497,26 +2742,51 @@ int bCheckBorders;
                      {
                      pD[cx] += ((pS[cx] + pS[cx + iWidth2])>>1);
                      if (pD[cx] > MB_UPPER) pD[cx] = MB_UPPER;
-                     if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
+                     else if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
                      }
                   pD += 8;
                   pS += iWidth2; // next line
                   }
                break;
             case 3: // half pel x,y
-               for (cy=0; cy<8; cy++)
-                  {
-                  for (cx=0; cx<8; cx++)
-                     {
+#ifdef HAS_NEON
+                {
+                    int16x8_t s16x8_00, s16x8_01, s16x8_10, s16x8_11, d16x8;
+                    const int16x8_t upper16x8 = vdupq_n_s16(MB_UPPER);
+                    const int16x8_t lower16x8 = vdupq_n_s16(MB_LOWER);
+                    const int16x8_t two16x8 = vdupq_n_s16(2); // rounding adjustment
+                    for (cy = 0; cy < 8; cy++) {
+                        d16x8 = vld1q_s16(pD);
+                        s16x8_00 = vld1q_s16(pS);
+                        s16x8_10 = vld1q_s16(pS+1);
+                        s16x8_01 = vld1q_s16(pS+iWidth2);
+                        s16x8_11 = vld1q_s16(pS+iWidth2+1);
+                        s16x8_00 = vaddq_s16(s16x8_00, s16x8_10); // horizontal sum
+                        s16x8_01 = vaddq_s16(s16x8_01, s16x8_11);
+                        s16x8_00 = vaddq_s16(s16x8_00, s16x8_01);
+                        s16x8_00 = vaddq_s16(s16x8_00, two16x8);
+                        s16x8_00 = vshrq_n_s16(s16x8_00, 2);
+                        d16x8 = vaddq_s16(d16x8, s16x8_00);
+                        d16x8 = vminq_s16(d16x8, upper16x8);
+                        d16x8 = vmaxq_s16(d16x8, lower16x8);
+                        vst1q_s16(pD, d16x8);
+                        pD += 8;
+                        pS += iWidth2;
+                    } // for cy
+                }
+#else
+               for (cy=0; cy<8; cy++) {
+                  for (cx=0; cx<8; cx++) {
                      s = pS[cx] + pS[cx + 1]; // top 2
                      s += pS[cx + iWidth2] + pS[cx + 1 + iWidth2]; // bottom 2
                      pD[cx] += ((s + 2)>>2);  // avg the 4 pixel group
                      if (pD[cx] > MB_UPPER) pD[cx] = MB_UPPER;
-                     if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
-                     }
+                     else if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
+                     } // for cx
                   pD += 8;
                   pS += iWidth2; // next line
-                  }
+                  } // for cy
+#endif
                break;
             } // switch on type
          }

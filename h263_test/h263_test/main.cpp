@@ -1,5 +1,5 @@
 #include "bb_h263.h"
-
+#include <time.h>
 BB_H263 h263;
 
 /* Windows BMP header for RGB565 images */
@@ -115,10 +115,22 @@ int iHeaderSize;
     fclose(oHandle);
 } /* WriteBMP() */
 
+int MilliTime()
+{
+int iTime;
+struct timespec res;
+
+    clock_gettime(CLOCK_MONOTONIC, &res);
+    iTime = (int)(1000*res.tv_sec + res.tv_nsec/1000000);
+
+    return iTime;
+} /* MilliTime() */
+
 int main(int argc, char *argv[])
 {
 int w, h, rc, iFrame;
 uint8_t *pBuf;
+int iTime;
     
     printf("H263 test\n");
 //    rc = h263.open("/Users/laurencebank/Downloads/homer_car_h263.mov", VideoDraw);
@@ -131,14 +143,17 @@ uint8_t *pBuf;
         pBuf = (uint8_t *)malloc(w * h *2);
         h263.setFrameBuf(pBuf, w * 2);
         iFrame = 0;
+        iTime = MilliTime();
         while (rc == H263_SUCCESS) {
             rc = h263.decodeFrame(0, 0);
-            printf("frame: %d\n", iFrame++);
-            if (iFrame == 4) {
-                WriteBMP("/Users/laurencebank/Downloads/matrix_test.bmp", pBuf, NULL, w, h, 16);
-            }
-        }
+ //           printf("frame: %d\n", iFrame++);
+ //           if (iFrame == 4) {
+ //               WriteBMP("/Users/laurencebank/Downloads/matrix_test.bmp", pBuf, NULL, w, h, 16);
+//            }
+        } // while video isn't finished
         h263.close();
+        iTime = MilliTime() - iTime;
+        printf("%d frames decoded in %d milliseconds\n", h263.getFrameCount(), iTime);
     }
    return 0;
 } /* main() */
