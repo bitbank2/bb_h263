@@ -227,8 +227,8 @@ typedef struct tagvideo {
 
 // Forward declarations
 int GetH263MCU(uint32_t *pTable, uint8_t *buf, int16_t *pMCU, int *iOffset, int *iBitnum, H263STATE *pVideo, int iQuant, int bTCOEF, uint8_t ucMBType);
-void H263MotCompAVG(int x, int y, signed int *pMVs, signed short *pMCUDest, H263STATE *pVideo);
-void H263MotComp(int x, int y, signed int iMV_X, signed int iMV_Y, signed short *pMCUDest, H263STATE *pVideo, int bBackward);
+void H263MotCompAVG(int x, int y, int32_t *pMVs, int16_t *pMCUDest, H263STATE *pVideo);
+void H263MotComp(int x, int y, int32_t iMV_X, int32_t iMV_Y, int16_t *pMCUDest, H263STATE *pVideo, int bBackward);
 void H263Close(H263STATE *pState);
 int ReadH263(H263STATE *pVideo);
 uint32_t H263_parseQT(H263STATE *pH263, const uint8_t *pData, int iDataSize);
@@ -438,7 +438,6 @@ int BB_H263::open(const char *szFilename)
 {
     FILE *pFile;
     uint32_t iDataSize;
-    uint8_t *pData;
     
     if (!szFilename) return H263_INVALID_PARAMETER;
     
@@ -1146,7 +1145,7 @@ uint32_t ulTCOEF[] = {0x000001,3,0x4, // 0 pos
 #define W5 1609 /* 2048*sqrt(2)*cos(5*pi/16) */
 #define W6 1108 /* 2048*sqrt(2)*cos(6*pi/16) */
 #define W7 565  /* 2048*sqrt(2)*cos(7*pi/16) */
-static void idctrow(short *blk)
+static void idctrow(int16_t *blk)
 {
   int x0, x1, x2, x3, x4, x5, x6, x7, x8;
 
@@ -1188,14 +1187,14 @@ static void idctrow(short *blk)
   x4 = (181*(x4-x5)+128)>>8;
 
   /* fourth stage */
-  blk[0] = (short)((x7+x1)>>8);
-  blk[1] = (short)((x3+x2)>>8);
-  blk[2] = (short)((x0+x4)>>8);
-  blk[3] = (short)((x8+x6)>>8);
-  blk[4] = (short)((x8-x6)>>8);
-  blk[5] = (short)((x0-x4)>>8);
-  blk[6] = (short)((x3-x2)>>8);
-  blk[7] = (short)((x7-x1)>>8);
+  blk[0] = (int16_t)((x7+x1)>>8);
+  blk[1] = (int16_t)((x3+x2)>>8);
+  blk[2] = (int16_t)((x0+x4)>>8);
+  blk[3] = (int16_t)((x8+x6)>>8);
+  blk[4] = (int16_t)((x8-x6)>>8);
+  blk[5] = (int16_t)((x0-x4)>>8);
+  blk[6] = (int16_t)((x3-x2)>>8);
+  blk[7] = (int16_t)((x7-x1)>>8);
 }
 
 /* column (vertical) IDCT
@@ -1207,7 +1206,7 @@ static void idctrow(short *blk)
  * where: c[0]    = 1/1024
  *        c[1..7] = (1/1024)*sqrt(2)
  */
-static void idctcol(short *blk)
+static void idctcol(int16_t *blk)
 {
   int x0, x1, x2, x3, x4, x5, x6, x7, x8;
   int t;
@@ -1219,7 +1218,7 @@ static void idctcol(short *blk)
     t = (blk[8*0]+32)>>6;
     if (t < -256) t = -256;
     if (t > 255) t = 255;
-    blk[8*0]=blk[8*1]=blk[8*2]=blk[8*3]=blk[8*4]=blk[8*5]=blk[8*6]=blk[8*7]=(short)t;
+    blk[8*0]=blk[8*1]=blk[8*2]=blk[8*3]=blk[8*4]=blk[8*5]=blk[8*6]=blk[8*7]=(int16_t)t;
     return;
   }
 
@@ -1256,39 +1255,39 @@ static void idctcol(short *blk)
   t = (x7+x1)>>14;
   if (t < -256) t = -256;
   if (t > 255) t = 255;
-  blk[8*0] = (short)t;
+  blk[8*0] = (int16_t)t;
   t = (x3+x2)>>14;
   if (t < -256) t = -256;
   if (t > 255) t = 255;
-  blk[8*1] = (short)t;
+  blk[8*1] = (int16_t)t;
   t = (x0+x4)>>14;
   if (t < -256) t = -256;
   if (t > 255) t = 255;
-  blk[8*2] = (short)t;
+  blk[8*2] = (int16_t)t;
   t = (x8+x6)>>14;
   if (t < -256) t = -256;
   if (t > 255) t = 255;
-  blk[8*3] = (short)t;
+  blk[8*3] = (int16_t)t;
   t = (x8-x6)>>14;
   if (t < -256) t = -256;
   if (t > 255) t = 255;
-  blk[8*4] = (short)t;
+  blk[8*4] = (int16_t)t;
   t = (x0-x4)>>14;
   if (t < -256) t = -256;
   if (t > 255) t = 255;
-  blk[8*5] = (short)t;
+  blk[8*5] = (int16_t)t;
   t = (x3-x2)>>14;
   if (t < -256) t = -256;
   if (t > 255) t = 255;
-  blk[8*6] = (short)t;
+  blk[8*6] = (int16_t)t;
   t = (x7-x1)>>14;
   if (t < -256) t = -256;
   if (t > 255) t = 255;
-  blk[8*7] = (short)t;
+  blk[8*7] = (int16_t)t;
 }
 
 /* two dimensional inverse discrete cosine transform */
-void H263IDCT(short *block, uint32_t ulMap)
+void H263IDCT(int16_t *block, uint32_t ulMap)
 {
 int i;
 
@@ -1309,20 +1308,27 @@ int i;
  *  PURPOSE    : Combine and output a subsampled color macro block.         *
  *                                                                          *
  ****************************************************************************/
-void H263PutMCU22(H263STATE *pVideo, int x, int y, short *pMCU, int iYBias, int iCrCbBias)
+void H263PutMCU22(H263STATE *pVideo, int x, int y, int16_t *pMCU, int iYBias, int iCrCbBias)
 {
 //signed long Cr,Cb;
 //int32_t Y1, Y2, Y3, Y4;
-int iRow, iCol;
-int16_t s, *pY, *pCr, *pCb;
-uint32_t *ulDest, ulPixel; // define as long to get around compiler innefficiency
+int iRow;
+int16_t *pY, *pCr, *pCb;
+uint32_t *ulDest; // define as long to get around compiler innefficiency
 //int32_t iCBG, iCRG, iCBB, iCRR;
-const int iRowOffsets[8] = {0,16,32,48,128,144,160,176};
 int iMaxCol, iMaxRow;
-uint16_t usIndex;
 const int iPitch = pVideo->iFramePitch;
-const int iPitch32 = iPitch/4; // pitch in uint32_t's
-    
+#ifdef HAS_NEON
+// 16-bit constants for NEON ycc->rgb conversion
+static const int16_t __attribute__((aligned(16))) sYCCRGBConstants[4] = {5742/2, -2925/2, -1409/2, 7258/2};
+#else
+const int iRowOffsets[8] = {0,16,32,48,128,144,160,176};
+int iCol;
+    uint16_t usIndex;
+    int16_t s;
+    uint32_t ulPixel;
+    const int iPitch32 = iPitch/4; // pitch in uint32_t's
+#endif
 //    if (pVideo->iOptions & PIL_CONVERT_16BPP)
 //       lsize >>= 2; // for longs
 
@@ -1337,8 +1343,110 @@ const int iPitch32 = iPitch/4; // pitch in uint32_t's
       iMaxRow = (pVideo->iHeight/2) & 7;
    if ((x+1)*16 > pVideo->iWidth)
       iMaxCol = (pVideo->iWidth/2) & 7;
+#ifdef HAS_NEON
+    const int16x4_t i164Constants = vld1_s16(&sYCCRGBConstants[0]); // 4 different constants used for "lane" multiplications by scalar
+    const int16x8_t p16 = vdupq_n_s16(16);
+    const int16x8_t p128 = vdupq_n_s16(-0x8000);
+    int16x8x2_t cr16x8x2, cb16x8x2;
+    int16x8_t cb16x8, cr16x8, cg16x8, y00_16x8, y01_16x8, y10_16x8, y11_16x8;
+    int16x8_t iCBB, iCBG, iCRG, iCRR;
+    uint8x8_t u88B, u88R, u88G;
+    uint16x8_t u168Temp, u168Temp2;
+    pY = (int16_t *)&pMCU[MCU0];
+       for (iRow=0; iRow<=iMaxRow; iRow++) { // do 8 rows
+           cr16x8 = vld1q_s16(pCr); // load 1 row of Cr
+           cb16x8 = vld1q_s16(pCb); // load 1 row of Cb
+           y00_16x8 = vld1q_s16(pY); // load top row of Y (left block)
+           y10_16x8 = vld1q_s16(pY+64); // load top row of Y (right block)
+           y01_16x8 = vld1q_s16(pY+8); // load bottom row of Y (left block)
+           y11_16x8 = vld1q_s16(pY+64+8); // load bottom row of Y (right block)
+           cr16x8 = vshlq_n_s16(cr16x8, 8); // ready for mult-take-high-part
+           cb16x8 = vshlq_n_s16(cb16x8, 8);
+           cr16x8 = vaddq_s16(cr16x8, p128); // -128
+           cb16x8 = vaddq_s16(cb16x8, p128);
+           y00_16x8 = vsubq_s16(y00_16x8, p16); // - 16
+           y10_16x8 = vsubq_s16(y10_16x8, p16);
+           y01_16x8 = vsubq_s16(y01_16x8, p16); // - 16
+           y11_16x8 = vsubq_s16(y11_16x8, p16);
+           y00_16x8 = vshlq_n_s16(y00_16x8, 4); // adjust scale of Y to match cr/cb
+           y10_16x8 = vshlq_n_s16(y10_16x8, 4);
+           y01_16x8 = vshlq_n_s16(y01_16x8, 4);
+           y11_16x8 = vshlq_n_s16(y11_16x8, 4);
+           cr16x8x2 = vzipq_s16(cr16x8, cr16x8); // double each cr
+           cb16x8x2 = vzipq_s16(cb16x8, cb16x8); // double each cb
+       // top row of left block
+           iCBB = vqdmulhq_lane_s16(cb16x8x2.val[0], i164Constants, 0);
+           iCBG = vqdmulhq_lane_s16(cb16x8x2.val[0], i164Constants, 1);
+           iCRG = vqdmulhq_lane_s16(cr16x8x2.val[0], i164Constants, 2);
+           iCRR = vqdmulhq_lane_s16(cr16x8x2.val[0], i164Constants, 3);
+           cb16x8 = vaddq_s16(iCBB, y00_16x8); // left 8 blue pixels
+           cg16x8 = vaddq_s16(y00_16x8, iCBG);
+           cg16x8 = vaddq_s16(cg16x8, iCRG); // left 8 green pixels
+           cr16x8 = vaddq_s16(y00_16x8, iCRR); // left 8 red pixels
+           u88R = vqrshrun_n_s16(cr16x8, 4); // shift right, narrow and saturate to 8-bit unsigned
+           u168Temp = vshll_n_u8(u88R, 8); // place red in upper part of 16-bit words
+           u88B = vqrshrun_n_s16(cb16x8, 4); // shift right, narrow and saturate to 8-bit unsigned
+           u88G = vqrshrun_n_s16(cg16x8, 4); // shift right, narrow and saturate to 8-bit unsigned
+           u168Temp2 = vshll_n_u8(u88G, 8); // shift green elements to top of 16-bit words
+           u168Temp = vsriq_n_u16(u168Temp, u168Temp2, 5); // shift green elements right and insert red elements
+           u168Temp2 = vshll_n_u8(u88B, 8); // shift blue elements to top of 16-bit words
+           u168Temp = vsriq_n_u16(u168Temp, u168Temp2, 11); // shift blue elements right and inserted into bottom 5 bits
+           vst1q_u16((uint16_t *)ulDest, u168Temp);
+           // second row of left block
+           cb16x8 = vaddq_s16(iCBB, y01_16x8); // left 8 blue pixels
+           cg16x8 = vaddq_s16(y01_16x8, iCBG);
+           cg16x8 = vaddq_s16(cg16x8, iCRG); // left 8 green pixels
+           cr16x8 = vaddq_s16(y01_16x8, iCRR); // left 8 red pixels
+           u88R = vqrshrun_n_s16(cr16x8, 4); // shift right, narrow and saturate to 8-bit unsigned
+           u168Temp = vshll_n_u8(u88R, 8); // place red in upper part of 16-bit words
+           u88B = vqrshrun_n_s16(cb16x8, 4); // shift right, narrow and saturate to 8-bit unsigned
+           u88G = vqrshrun_n_s16(cg16x8, 4); // shift right, narrow and saturate to 8-bit unsigned
+           u168Temp2 = vshll_n_u8(u88G, 8); // shift green elements to top of 16-bit words
+           u168Temp = vsriq_n_u16(u168Temp, u168Temp2, 5); // shift green elements right and insert red elements
+           u168Temp2 = vshll_n_u8(u88B, 8); // shift blue elements to top of 16-bit words
+           u168Temp = vsriq_n_u16(u168Temp, u168Temp2, 11); // shift blue elements right and inserted into bottom 5 bits
+           vst1q_u16((uint16_t *)ulDest + iPitch/2, u168Temp);
+           // top row of right block
+           iCBB = vqdmulhq_lane_s16(cb16x8x2.val[1], i164Constants, 0);
+           iCBG = vqdmulhq_lane_s16(cb16x8x2.val[1], i164Constants, 1);
+           iCRG = vqdmulhq_lane_s16(cr16x8x2.val[1], i164Constants, 2);
+           iCRR = vqdmulhq_lane_s16(cr16x8x2.val[1], i164Constants, 3);
+           cb16x8 = vaddq_s16(iCBB, y10_16x8); // left 8 blue pixels
+           cg16x8 = vaddq_s16(y10_16x8, iCBG);
+           cg16x8 = vaddq_s16(cg16x8, iCRG); // left 8 green pixels
+           cr16x8 = vaddq_s16(y10_16x8, iCRR); // left 8 red pixels
+           u88R = vqrshrun_n_s16(cr16x8, 4); // shift right, narrow and saturate to 8-bit unsigned
+           u168Temp = vshll_n_u8(u88R, 8); // place red in upper part of 16-bit words
+           u88B = vqrshrun_n_s16(cb16x8, 4); // shift right, narrow and saturate to 8-bit unsigned
+           u88G = vqrshrun_n_s16(cg16x8, 4); // shift right, narrow and saturate to 8-bit unsigned
+           u168Temp2 = vshll_n_u8(u88G, 8); // shift green elements to top of 16-bit words
+           u168Temp = vsriq_n_u16(u168Temp, u168Temp2, 5); // shift green elements right and insert red elements
+           u168Temp2 = vshll_n_u8(u88B, 8); // shift blue elements to top of 16-bit words
+           u168Temp = vsriq_n_u16(u168Temp, u168Temp2, 11); // shift blue elements right and inserted into bottom 5 bits
+           vst1q_u16((uint16_t *)ulDest + 8, u168Temp);
+           // second row of right block
+           cb16x8 = vaddq_s16(iCBB, y11_16x8); // left 8 blue pixels
+           cg16x8 = vaddq_s16(y11_16x8, iCBG);
+           cg16x8 = vaddq_s16(cg16x8, iCRG); // left 8 green pixels
+           cr16x8 = vaddq_s16(y11_16x8, iCRR); // left 8 red pixels
+           u88R = vqrshrun_n_s16(cr16x8, 4); // shift right, narrow and saturate to 8-bit unsigned
+           u168Temp = vshll_n_u8(u88R, 8); // place red in upper part of 16-bit words
+           u88B = vqrshrun_n_s16(cb16x8, 4); // shift right, narrow and saturate to 8-bit unsigned
+           u88G = vqrshrun_n_s16(cg16x8, 4); // shift right, narrow and saturate to 8-bit unsigned
+           u168Temp2 = vshll_n_u8(u88G, 8); // shift green elements to top of 16-bit words
+           u168Temp = vsriq_n_u16(u168Temp, u168Temp2, 5); // shift green elements right and insert red elements
+           u168Temp2 = vshll_n_u8(u88B, 8); // shift blue elements to top of 16-bit words
+           u168Temp = vsriq_n_u16(u168Temp, u168Temp2, 11); // shift blue elements right and inserted into bottom 5 bits
+           vst1q_u16((uint16_t *)ulDest + 8 + iPitch/2, u168Temp);
+           pCr += 8; pCb += 8; pY += 16; // next pair of rows
+           ulDest += iPitch/2;
+           if (iRow == 3) { // halfway down, switch to next 2 MCUs
+               pY += 64;
+           }
+        } // for each row
+#else
    for (iRow=0; iRow <= iMaxRow; iRow++) {
-       pY = (signed short *)&pMCU[MCU0 + iRowOffsets[iRow]];
+       pY = (int16_t *)&pMCU[MCU0 + iRowOffsets[iRow]];
        for (iCol=0; iCol<=iMaxCol; iCol++) {
            s = pY[0];
             s = u8RangeTable[s & 0x3ff];
@@ -1378,12 +1486,13 @@ const int iPitch32 = iPitch/4; // pitch in uint32_t's
       ulDest -= (iMaxCol+1); // pull back 16 pixels
       ulDest += iPitch32*2; // next pair of lines of dest pixels
       } // for each row
+#endif
 } /* H263PutMCU22() */
 
 #define GETMOREBITS if (iBit >= 16) {iBit -= 16; ulBits <<= 16; ulBits |= MOTOSHORT(&buf[iOff]); iOff += 2;}
 #define GETMOREBITS8 if (iBit >= 8) {iBit -= 8; ulBits <<= 8; ulBits |= buf[iOff++];}
 
-signed int H263GetMVPredictor(int x, int y, int bUnrestricted, int iMBCount, signed char *cMVArray, signed char cDelta)
+int32_t H263GetMVPredictor(int x, int y, int bUnrestricted, int iMBCount, signed char *cMVArray, signed char cDelta)
 {
 signed char cTemp, cMV1, cMV2, cMV3; // the 3 candidate predictors
 
@@ -1447,10 +1556,10 @@ signed char cTemp, cMV1, cMV2, cMV3; // the 3 candidate predictors
  *  PURPOSE    : Copy a MB to our prediction Luma/Chroma image.             *
  *                                                                          *
  ****************************************************************************/
-void H263CopyMB(H263STATE *pVideo, int x, int y, signed short *pMCU)
+void H263CopyMB(H263STATE *pVideo, int x, int y, int16_t *pMCU)
 {
 uint64_t *pS, *pD;
-signed short *pDest;
+int16_t *pDest;
 int i, cy;
 const int iFrameDelta = pVideo->iFrameCX>>2;
     
@@ -1570,7 +1679,7 @@ int i, j;
 
 void H263SwapFrames(H263STATE *pVideo)
 {
-signed short *pTemp;
+int16_t *pTemp;
 int i;
 
    for (i=0; i<3; i++) {
@@ -1600,7 +1709,7 @@ int iGOB, iGOBCount, iMB, iMBCount, iMBMax;
 char cSourceFormat, ucMBType, ucCBPC;
 uint32_t j, count, codestart, repeat, *pVLCTable;
 uint32_t ulPTYPE;
-signed int iMV_X, iMV_Y;
+int32_t iMV_X, iMV_Y;
 uint16_t *pMVTable, *pMCBPCTable;
 int *pClip;
 uint8_t *pTables;
@@ -1827,7 +1936,7 @@ get_mcbpc:
          iBit++;
            if (ulCode) { // this MB is NOT coded, skip it
             iMV_X = iMV_Y = 0; // skipped blocks have a MV of 0,0
-            memset(pMCU, 0, DCTSIZE2*6*sizeof(short));
+            memset(pMCU, 0, DCTSIZE2*6*sizeof(int16_t));
             H263MotComp(x, y, iMV_X, iMV_Y, pMCU, pVideo, 0);
             H263CopyMB(pVideo, x, y, pMCU); // copy the MB to our prediction image
             goto h263next;
@@ -1970,7 +2079,7 @@ int GetH263MCU(uint32_t *pTable, uint8_t *buf, int16_t *pMCU, int *iOffset, int 
 int iBit = *iBitnum;
 int iOff = *iOffset;
 int iRun, iIndex, iErr;
-signed int iLevel;
+int32_t iLevel;
 uint32_t ulBits, ulCode, ulVal;
 int bLast;
 
@@ -2005,13 +2114,13 @@ int bLast;
               ulBits |= MOTOSHORT(&buf[iOff]);
               iOff += 2;
           }
-          ulCode = (ulBits >> (19-iBit)) & 0x1fff; // get 13-bits
-          ulVal = pTable[ulCode*2]; // get the bit value
+          ulCode = (ulBits >> (18-iBit)) & 0x3ffe; // get 13-bits, shifted left by 1 to index shorts
+          ulVal = pTable[ulCode]; // get the bit value
           if (ulVal == 0) { // invalid code
               pVideo->iLastError = H263_DECODE_ERROR;
               return -1;
           }
-         iBit += pTable[(ulCode & 0x1ffe)*2 + 1]; // get the true length
+          iBit += pTable[(ulCode & 0x3ffc)+1]; //(ulCode & 0x1ffe)*2 + 1]; // get the true length
           if (ulVal == 0xffffffff) { // special ESCAPE code
               if (iBit >= 16) { // we need 15 bits
                   iBit -= 16;
@@ -2065,11 +2174,11 @@ int bLast;
  *  PURPOSE    : Apply bidirectional motion compensation to predicted MB.   *
  *                                                                          *
  ****************************************************************************/
-void H263MotCompAVG(int x, int y, signed int *pMVs, signed short *pMCUDest, H263STATE *pVideo)
+void H263MotCompAVG(int x, int y, int32_t *pMVs, int16_t *pMCUDest, H263STATE *pVideo)
 {
-signed short sF, sB, *pSF, *pSB, *pD;
-signed int i, dxF, dyF, dxB, dyB, cx, cy, iTypeF, iTypeB;
-signed int lyF, lyB;
+int16_t sF, sB, *pSF, *pSB, *pD;
+int32_t i, dxF, dyF, dxB, dyB, cx, cy, iTypeF, iTypeB;
+int32_t lyF, lyB;
 
    // determine the type of pixel capture
    iTypeF = 0;
@@ -2205,7 +2314,7 @@ signed int lyF, lyB;
  *  PURPOSE    : Apply motion compensation to predicted MacroBlock.         *
  *                                                                          *
  ****************************************************************************/
-void H263MotComp(int x, int y, signed int iMV_X, signed int iMV_Y, signed short *pMCUDest, H263STATE *pVideo, int bBackward)
+void H263MotComp(int x, int y, int32_t iMV_X, int32_t iMV_Y, int16_t *pMCUDest, H263STATE *pVideo, int bBackward)
 {
 int16_t s, *pS, *pD;
 int32_t i, dx, dy, cx, cy, iType;
@@ -2257,7 +2366,7 @@ int iFrameCX = pVideo->iFrameCX; // keep local copy to help compiler make better
                      if (nx >= iFrameCX) nx = iFrameCX-1;
                      pD[cx] += pS[ny*iFrameCX + nx];
                      if (pD[cx] > MB_UPPER) pD[cx] = MB_UPPER;
-                     if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
+                     else if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
                      }
                   pD += 8;
                   }
@@ -2275,7 +2384,7 @@ int iFrameCX = pVideo->iFrameCX; // keep local copy to help compiler make better
                      if (nx >= iFrameCX) nx = iFrameCX-1;
                      pD[cx] += ((pS[ny*iFrameCX + nx] + pS[ny*iFrameCX + nx + 1] + 1)>>1);  // avg left/right pixels
                      if (pD[cx] > MB_UPPER) pD[cx] = MB_UPPER;
-                     if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
+                     else if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
                      }
                   pD += 8;
                   }
@@ -2293,7 +2402,7 @@ int iFrameCX = pVideo->iFrameCX; // keep local copy to help compiler make better
                      if (nx >= iFrameCX) nx = iFrameCX-1;
                      pD[cx] += ((pS[ny*iFrameCX + nx] + pS[(ny+1)*iFrameCX + nx] + 1)>>1);  // avg left/right pixels
                      if (pD[cx] > MB_UPPER) pD[cx] = MB_UPPER;
-                     if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
+                     else if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
                      }
                   pD += 8;
                   }
@@ -2313,7 +2422,7 @@ int iFrameCX = pVideo->iFrameCX; // keep local copy to help compiler make better
                      s += pS[(ny+1)*iFrameCX + nx] + pS[(ny+1)*iFrameCX + nx + 1]; // bottom 2
                      pD[cx] += ((s + 2)>>2);  // avg the 4 pixel group
                      if (pD[cx] > MB_UPPER) pD[cx] = MB_UPPER;
-                     if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
+                     else if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
                      }
                   pD += 8;
                   }
@@ -2329,13 +2438,53 @@ int iFrameCX = pVideo->iFrameCX; // keep local copy to help compiler make better
             case 0: // full pel in both dirs
 #ifdef HAS_NEON
                 {
-                    int16x8_t s16x8, d16x8;
+                    int16x8_t s16x8_0, s16x8_1, d16x8_0, d16x8_1;
                     const int16x8_t upper16x8 = vdupq_n_s16(MB_UPPER);
                     const int16x8_t lower16x8 = vdupq_n_s16(MB_LOWER);
+                    for (cy = 0; cy < 8; cy+=2) {
+                        s16x8_0 = vld1q_s16(pS);
+                        d16x8_0 = vld1q_s16(pD);
+                        s16x8_1 = vld1q_s16(pS+iFrameCX);
+                        d16x8_1 = vld1q_s16(pD+8);
+                        d16x8_0 = vaddq_s16(d16x8_0, s16x8_0);
+                        d16x8_1 = vaddq_s16(d16x8_1, s16x8_1);
+                        d16x8_0 = vminq_s16(d16x8_0, upper16x8);
+                        d16x8_1 = vminq_s16(d16x8_1, upper16x8);
+                        d16x8_0 = vmaxq_s16(d16x8_0, lower16x8);
+                        d16x8_1 = vmaxq_s16(d16x8_1, lower16x8);
+                        vst1q_s16(pD, d16x8_0);
+                        vst1q_s16(pD+8, d16x8_1);
+                        pD += 16;
+                        pS += iFrameCX*2;
+                    } // for cy
+                }
+#else
+               for (cy=0; cy<8; cy++) {
+                  for (cx=0; cx<8; cx++) {
+                     pD[cx] += pS[cx];
+                     if (pD[cx] > MB_UPPER) pD[cx] = MB_UPPER;
+                     else if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
+                  } // for cx
+                  pD += 8;
+                  pS += iFrameCX; // next line
+               } // for cy
+#endif
+               break;
+            case 1: // full pel Y, half-pel X
+#ifdef HAS_NEON
+                {
+                    int16x8_t s16x8_0, s16x8_1, d16x8;
+                    const int16x8_t upper16x8 = vdupq_n_s16(MB_UPPER);
+                    const int16x8_t lower16x8 = vdupq_n_s16(MB_LOWER);
+                    const int16x8_t one16x8 = vdupq_n_s16(1);
                     for (cy = 0; cy < 8; cy++) {
-                        s16x8 = vld1q_s16(pS);
+                        s16x8_0 = vld1q_s16(pS);
+                        s16x8_1 = vld1q_s16(pS+1);
                         d16x8 = vld1q_s16(pD);
-                        d16x8 = vaddq_s16(d16x8, s16x8);
+                        s16x8_0 = vaddq_s16(s16x8_0, s16x8_1); // horizontal sum
+                        s16x8_0 = vaddq_s16(s16x8_0, one16x8);
+                        s16x8_0 = vshrq_n_s16(s16x8_0, 1); // average with rounding up
+                        d16x8 = vaddq_s16(d16x8, s16x8_0);
                         d16x8 = vminq_s16(d16x8, upper16x8);
                         d16x8 = vmaxq_s16(d16x8, lower16x8);
                         vst1q_s16(pD, d16x8);
@@ -2346,40 +2495,48 @@ int iFrameCX = pVideo->iFrameCX; // keep local copy to help compiler make better
 #else
                for (cy=0; cy<8; cy++) {
                   for (cx=0; cx<8; cx++) {
-                     pD[cx] += pS[cx];
-                     if (pD[cx] > MB_UPPER) pD[cx] = MB_UPPER;
-                     if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
-                  } // for cx
-                  pD += 8;
-                  pS += iFrameCX; // next line
-               } // for cy
-#endif
-               break;
-            case 1: // full pel Y, half-pel X
-               for (cy=0; cy<8; cy++)
-                  {
-                  for (cx=0; cx<8; cx++)
-                     {
                      pD[cx] += ((pS[cx] + pS[cx + 1] + 1)>>1);  // avg left/right pixels
                      if (pD[cx] > MB_UPPER) pD[cx] = MB_UPPER;
-                     if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
-                     }
+                     else if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
+                     } // for cx
                   pD += 8;
                   pS += iFrameCX; // next line
-                  }
+                  } // for cy
+#endif
                break;
             case 2: // half pel Y, full pel X
-               for (cy=0; cy<8; cy++)
-                  {
-                  for (cx=0; cx<8; cx++)
-                     {
+#ifdef HAS_NEON
+                {
+                    int16x8_t s16x8_0, s16x8_1, d16x8;
+                    const int16x8_t upper16x8 = vdupq_n_s16(MB_UPPER);
+                    const int16x8_t lower16x8 = vdupq_n_s16(MB_LOWER);
+                    const int16x8_t one16x8 = vdupq_n_s16(1);
+                    for (cy = 0; cy < 8; cy++) {
+                        s16x8_0 = vld1q_s16(pS);
+                        s16x8_1 = vld1q_s16(pS+iFrameCX);
+                        d16x8 = vld1q_s16(pD);
+                        s16x8_0 = vaddq_s16(s16x8_0, s16x8_1); // vertical sum
+                        s16x8_0 = vaddq_s16(s16x8_0, one16x8);
+                        s16x8_0 = vshrq_n_s16(s16x8_0, 1); // average with rounding up
+                        d16x8 = vaddq_s16(d16x8, s16x8_0);
+                        d16x8 = vminq_s16(d16x8, upper16x8);
+                        d16x8 = vmaxq_s16(d16x8, lower16x8);
+                        vst1q_s16(pD, d16x8);
+                        pD += 8;
+                        pS += iFrameCX;
+                    } // for cy
+                }
+#else
+               for (cy=0; cy<8; cy++) {
+                  for (cx=0; cx<8; cx++) {
                      pD[cx] += ((pS[cx] + pS[cx + iFrameCX] + 1)>>1);  // avg left/right pixels
                      if (pD[cx] > MB_UPPER) pD[cx] = MB_UPPER;
-                     if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
-                     }
+                     else if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
+                     } // for cx
                   pD += 8;
                   pS += iFrameCX; // next line
-                  }
+                  } // for cy
+#endif
                break;
             case 3: // half pel Y, half pel X
 #ifdef HAS_NEON
@@ -2414,7 +2571,7 @@ int iFrameCX = pVideo->iFrameCX; // keep local copy to help compiler make better
                      s += pS[cx + iFrameCX] + pS[cx + 1 + iFrameCX]; // bottom 2
                      pD[cx] += ((s + 2)>>2);  // avg the 4 pixel group
                      if (pD[cx] > MB_UPPER) pD[cx] = MB_UPPER;
-                     if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
+                     else if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
                      } // for cx
                   pD += 8;
                   pS += iFrameCX; // next line
@@ -2470,7 +2627,7 @@ int iFrameCX = pVideo->iFrameCX; // keep local copy to help compiler make better
                      if (nx >= iWidth2) nx = iWidth2-1;
                      pD[cx] += pS[ny*iWidth2 + nx];
                      if (pD[cx] > MB_UPPER) pD[cx] = MB_UPPER;
-                     if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
+                     else if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
                      }
                   pD += 8;
                   }
@@ -2488,7 +2645,7 @@ int iFrameCX = pVideo->iFrameCX; // keep local copy to help compiler make better
                      if (nx >= iWidth2) nx = iWidth2-1;
                      pD[cx] += ((pS[ny*iWidth2 + nx] + pS[ny*iWidth2 + nx + 1])>>1);
                      if (pD[cx] > MB_UPPER) pD[cx] = MB_UPPER;
-                     if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
+                     else if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
                      }
                   pD += 8;
                   }
@@ -2506,7 +2663,7 @@ int iFrameCX = pVideo->iFrameCX; // keep local copy to help compiler make better
                      if (nx >= iWidth2) nx = iWidth2-1;
                      pD[cx] += ((pS[ny*iWidth2 + nx] + pS[(ny+1)*iWidth2 + nx])>>1);
                      if (pD[cx] > MB_UPPER) pD[cx] = MB_UPPER;
-                     if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
+                     else if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
                      }
                   pD += 8;
                   }
@@ -2526,7 +2683,7 @@ int iFrameCX = pVideo->iFrameCX; // keep local copy to help compiler make better
                      s += pS[(ny+1)*iWidth2 + nx] + pS[(ny+1)*iWidth2 + nx + 1]; // bottom 2
                      pD[cx] += ((s + 2)>>2);  // avg the 4 pixel group
                      if (pD[cx] > MB_UPPER) pD[cx] = MB_UPPER;
-                     if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
+                     else if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
                      }
                   pD += 8;
                   }
@@ -2561,7 +2718,7 @@ int iFrameCX = pVideo->iFrameCX; // keep local copy to help compiler make better
                   for (cx=0; cx<8; cx++) {
                      pD[cx] += pS[cx];
                      if (pD[cx] > MB_UPPER) pD[cx] = MB_UPPER;
-                     if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
+                     else if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
                   } // for cx
                   pD += 8;
                   pS += iWidth2; // next line
@@ -2575,7 +2732,7 @@ int iFrameCX = pVideo->iFrameCX; // keep local copy to help compiler make better
                      {
                      pD[cx] += ((pS[cx] + pS[cx + 1])>>1);
                      if (pD[cx] > MB_UPPER) pD[cx] = MB_UPPER;
-                     if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
+                     else if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
                      }
                   pD += 8;
                   pS += iWidth2; // next line
@@ -2588,26 +2745,51 @@ int iFrameCX = pVideo->iFrameCX; // keep local copy to help compiler make better
                      {
                      pD[cx] += ((pS[cx] + pS[cx + iWidth2])>>1);
                      if (pD[cx] > MB_UPPER) pD[cx] = MB_UPPER;
-                     if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
+                     else if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
                      }
                   pD += 8;
                   pS += iWidth2; // next line
                   }
                break;
             case 3: // half pel x,y
-               for (cy=0; cy<8; cy++)
-                  {
-                  for (cx=0; cx<8; cx++)
-                     {
+#ifdef HAS_NEON
+                {
+                    int16x8_t s16x8_00, s16x8_01, s16x8_10, s16x8_11, d16x8;
+                    const int16x8_t upper16x8 = vdupq_n_s16(MB_UPPER);
+                    const int16x8_t lower16x8 = vdupq_n_s16(MB_LOWER);
+                    const int16x8_t two16x8 = vdupq_n_s16(2); // rounding adjustment
+                    for (cy = 0; cy < 8; cy++) {
+                        d16x8 = vld1q_s16(pD);
+                        s16x8_00 = vld1q_s16(pS);
+                        s16x8_10 = vld1q_s16(pS+1);
+                        s16x8_01 = vld1q_s16(pS+iWidth2);
+                        s16x8_11 = vld1q_s16(pS+iWidth2+1);
+                        s16x8_00 = vaddq_s16(s16x8_00, s16x8_10); // horizontal sum
+                        s16x8_01 = vaddq_s16(s16x8_01, s16x8_11);
+                        s16x8_00 = vaddq_s16(s16x8_00, s16x8_01);
+                        s16x8_00 = vaddq_s16(s16x8_00, two16x8);
+                        s16x8_00 = vshrq_n_s16(s16x8_00, 2);
+                        d16x8 = vaddq_s16(d16x8, s16x8_00);
+                        d16x8 = vminq_s16(d16x8, upper16x8);
+                        d16x8 = vmaxq_s16(d16x8, lower16x8);
+                        vst1q_s16(pD, d16x8);
+                        pD += 8;
+                        pS += iWidth2;
+                    } // for cy
+                }
+#else
+               for (cy=0; cy<8; cy++) {
+                  for (cx=0; cx<8; cx++) {
                      s = pS[cx] + pS[cx + 1]; // top 2
                      s += pS[cx + iWidth2] + pS[cx + 1 + iWidth2]; // bottom 2
                      pD[cx] += ((s + 2)>>2);  // avg the 4 pixel group
                      if (pD[cx] > MB_UPPER) pD[cx] = MB_UPPER;
-                     if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
-                     }
+                     else if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
+                     } // for cx
                   pD += 8;
                   pS += iWidth2; // next line
-                  }
+                  } // for cy
+#endif
                break;
             } // switch on type
          }

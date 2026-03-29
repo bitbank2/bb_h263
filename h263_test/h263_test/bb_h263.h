@@ -227,8 +227,8 @@ typedef struct tagvideo {
 
 // Forward declarations
 int GetH263MCU(uint32_t *pTable, uint8_t *buf, int16_t *pMCU, int *iOffset, int *iBitnum, H263STATE *pVideo, int iQuant, int bTCOEF, uint8_t ucMBType);
-void H263MotCompAVG(int x, int y, signed int *pMVs, signed short *pMCUDest, H263STATE *pVideo);
-void H263MotComp(int x, int y, signed int iMV_X, signed int iMV_Y, signed short *pMCUDest, H263STATE *pVideo, int bBackward);
+void H263MotCompAVG(int x, int y, int32_t *pMVs, int16_t *pMCUDest, H263STATE *pVideo);
+void H263MotComp(int x, int y, int32_t iMV_X, int32_t iMV_Y, int16_t *pMCUDest, H263STATE *pVideo, int bBackward);
 void H263Close(H263STATE *pState);
 int ReadH263(H263STATE *pVideo);
 uint32_t H263_parseQT(H263STATE *pH263, const uint8_t *pData, int iDataSize);
@@ -438,7 +438,6 @@ int BB_H263::open(const char *szFilename)
 {
     FILE *pFile;
     uint32_t iDataSize;
-    uint8_t *pData;
     
     if (!szFilename) return H263_INVALID_PARAMETER;
     
@@ -1146,7 +1145,7 @@ uint32_t ulTCOEF[] = {0x000001,3,0x4, // 0 pos
 #define W5 1609 /* 2048*sqrt(2)*cos(5*pi/16) */
 #define W6 1108 /* 2048*sqrt(2)*cos(6*pi/16) */
 #define W7 565  /* 2048*sqrt(2)*cos(7*pi/16) */
-static void idctrow(short *blk)
+static void idctrow(int16_t *blk)
 {
   int x0, x1, x2, x3, x4, x5, x6, x7, x8;
 
@@ -1188,14 +1187,14 @@ static void idctrow(short *blk)
   x4 = (181*(x4-x5)+128)>>8;
 
   /* fourth stage */
-  blk[0] = (short)((x7+x1)>>8);
-  blk[1] = (short)((x3+x2)>>8);
-  blk[2] = (short)((x0+x4)>>8);
-  blk[3] = (short)((x8+x6)>>8);
-  blk[4] = (short)((x8-x6)>>8);
-  blk[5] = (short)((x0-x4)>>8);
-  blk[6] = (short)((x3-x2)>>8);
-  blk[7] = (short)((x7-x1)>>8);
+  blk[0] = (int16_t)((x7+x1)>>8);
+  blk[1] = (int16_t)((x3+x2)>>8);
+  blk[2] = (int16_t)((x0+x4)>>8);
+  blk[3] = (int16_t)((x8+x6)>>8);
+  blk[4] = (int16_t)((x8-x6)>>8);
+  blk[5] = (int16_t)((x0-x4)>>8);
+  blk[6] = (int16_t)((x3-x2)>>8);
+  blk[7] = (int16_t)((x7-x1)>>8);
 }
 
 /* column (vertical) IDCT
@@ -1207,7 +1206,7 @@ static void idctrow(short *blk)
  * where: c[0]    = 1/1024
  *        c[1..7] = (1/1024)*sqrt(2)
  */
-static void idctcol(short *blk)
+static void idctcol(int16_t *blk)
 {
   int x0, x1, x2, x3, x4, x5, x6, x7, x8;
   int t;
@@ -1219,7 +1218,7 @@ static void idctcol(short *blk)
     t = (blk[8*0]+32)>>6;
     if (t < -256) t = -256;
     if (t > 255) t = 255;
-    blk[8*0]=blk[8*1]=blk[8*2]=blk[8*3]=blk[8*4]=blk[8*5]=blk[8*6]=blk[8*7]=(short)t;
+    blk[8*0]=blk[8*1]=blk[8*2]=blk[8*3]=blk[8*4]=blk[8*5]=blk[8*6]=blk[8*7]=(int16_t)t;
     return;
   }
 
@@ -1256,39 +1255,39 @@ static void idctcol(short *blk)
   t = (x7+x1)>>14;
   if (t < -256) t = -256;
   if (t > 255) t = 255;
-  blk[8*0] = (short)t;
+  blk[8*0] = (int16_t)t;
   t = (x3+x2)>>14;
   if (t < -256) t = -256;
   if (t > 255) t = 255;
-  blk[8*1] = (short)t;
+  blk[8*1] = (int16_t)t;
   t = (x0+x4)>>14;
   if (t < -256) t = -256;
   if (t > 255) t = 255;
-  blk[8*2] = (short)t;
+  blk[8*2] = (int16_t)t;
   t = (x8+x6)>>14;
   if (t < -256) t = -256;
   if (t > 255) t = 255;
-  blk[8*3] = (short)t;
+  blk[8*3] = (int16_t)t;
   t = (x8-x6)>>14;
   if (t < -256) t = -256;
   if (t > 255) t = 255;
-  blk[8*4] = (short)t;
+  blk[8*4] = (int16_t)t;
   t = (x0-x4)>>14;
   if (t < -256) t = -256;
   if (t > 255) t = 255;
-  blk[8*5] = (short)t;
+  blk[8*5] = (int16_t)t;
   t = (x3-x2)>>14;
   if (t < -256) t = -256;
   if (t > 255) t = 255;
-  blk[8*6] = (short)t;
+  blk[8*6] = (int16_t)t;
   t = (x7-x1)>>14;
   if (t < -256) t = -256;
   if (t > 255) t = 255;
-  blk[8*7] = (short)t;
+  blk[8*7] = (int16_t)t;
 }
 
 /* two dimensional inverse discrete cosine transform */
-void H263IDCT(short *block, uint32_t ulMap)
+void H263IDCT(int16_t *block, uint32_t ulMap)
 {
 int i;
 
@@ -1309,22 +1308,26 @@ int i;
  *  PURPOSE    : Combine and output a subsampled color macro block.         *
  *                                                                          *
  ****************************************************************************/
-void H263PutMCU22(H263STATE *pVideo, int x, int y, short *pMCU, int iYBias, int iCrCbBias)
+void H263PutMCU22(H263STATE *pVideo, int x, int y, int16_t *pMCU, int iYBias, int iCrCbBias)
 {
 //signed long Cr,Cb;
 //int32_t Y1, Y2, Y3, Y4;
-int iRow, iCol;
-int16_t s, *pY, *pCr, *pCb;
-uint32_t *ulDest, ulPixel; // define as long to get around compiler innefficiency
+int iRow;
+int16_t *pY, *pCr, *pCb;
+uint32_t *ulDest; // define as long to get around compiler innefficiency
 //int32_t iCBG, iCRG, iCBB, iCRR;
-const int iRowOffsets[8] = {0,16,32,48,128,144,160,176};
 int iMaxCol, iMaxRow;
-uint16_t usIndex;
 const int iPitch = pVideo->iFramePitch;
-const int iPitch32 = iPitch/4; // pitch in uint32_t's
 #ifdef HAS_NEON
 // 16-bit constants for NEON ycc->rgb conversion
 static const int16_t __attribute__((aligned(16))) sYCCRGBConstants[4] = {5742/2, -2925/2, -1409/2, 7258/2};
+#else
+const int iRowOffsets[8] = {0,16,32,48,128,144,160,176};
+int iCol;
+    uint16_t usIndex;
+    int16_t s;
+    uint32_t ulPixel;
+    const int iPitch32 = iPitch/4; // pitch in uint32_t's
 #endif
 //    if (pVideo->iOptions & PIL_CONVERT_16BPP)
 //       lsize >>= 2; // for longs
@@ -1443,7 +1446,7 @@ static const int16_t __attribute__((aligned(16))) sYCCRGBConstants[4] = {5742/2,
         } // for each row
 #else
    for (iRow=0; iRow <= iMaxRow; iRow++) {
-       pY = (signed short *)&pMCU[MCU0 + iRowOffsets[iRow]];
+       pY = (int16_t *)&pMCU[MCU0 + iRowOffsets[iRow]];
        for (iCol=0; iCol<=iMaxCol; iCol++) {
            s = pY[0];
             s = u8RangeTable[s & 0x3ff];
@@ -1489,7 +1492,7 @@ static const int16_t __attribute__((aligned(16))) sYCCRGBConstants[4] = {5742/2,
 #define GETMOREBITS if (iBit >= 16) {iBit -= 16; ulBits <<= 16; ulBits |= MOTOSHORT(&buf[iOff]); iOff += 2;}
 #define GETMOREBITS8 if (iBit >= 8) {iBit -= 8; ulBits <<= 8; ulBits |= buf[iOff++];}
 
-signed int H263GetMVPredictor(int x, int y, int bUnrestricted, int iMBCount, signed char *cMVArray, signed char cDelta)
+int32_t H263GetMVPredictor(int x, int y, int bUnrestricted, int iMBCount, signed char *cMVArray, signed char cDelta)
 {
 signed char cTemp, cMV1, cMV2, cMV3; // the 3 candidate predictors
 
@@ -1553,10 +1556,10 @@ signed char cTemp, cMV1, cMV2, cMV3; // the 3 candidate predictors
  *  PURPOSE    : Copy a MB to our prediction Luma/Chroma image.             *
  *                                                                          *
  ****************************************************************************/
-void H263CopyMB(H263STATE *pVideo, int x, int y, signed short *pMCU)
+void H263CopyMB(H263STATE *pVideo, int x, int y, int16_t *pMCU)
 {
 uint64_t *pS, *pD;
-signed short *pDest;
+int16_t *pDest;
 int i, cy;
 const int iFrameDelta = pVideo->iFrameCX>>2;
     
@@ -1676,7 +1679,7 @@ int i, j;
 
 void H263SwapFrames(H263STATE *pVideo)
 {
-signed short *pTemp;
+int16_t *pTemp;
 int i;
 
    for (i=0; i<3; i++) {
@@ -1706,7 +1709,7 @@ int iGOB, iGOBCount, iMB, iMBCount, iMBMax;
 char cSourceFormat, ucMBType, ucCBPC;
 uint32_t j, count, codestart, repeat, *pVLCTable;
 uint32_t ulPTYPE;
-signed int iMV_X, iMV_Y;
+int32_t iMV_X, iMV_Y;
 uint16_t *pMVTable, *pMCBPCTable;
 int *pClip;
 uint8_t *pTables;
@@ -1933,7 +1936,7 @@ get_mcbpc:
          iBit++;
            if (ulCode) { // this MB is NOT coded, skip it
             iMV_X = iMV_Y = 0; // skipped blocks have a MV of 0,0
-            memset(pMCU, 0, DCTSIZE2*6*sizeof(short));
+            memset(pMCU, 0, DCTSIZE2*6*sizeof(int16_t));
             H263MotComp(x, y, iMV_X, iMV_Y, pMCU, pVideo, 0);
             H263CopyMB(pVideo, x, y, pMCU); // copy the MB to our prediction image
             goto h263next;
@@ -2076,7 +2079,7 @@ int GetH263MCU(uint32_t *pTable, uint8_t *buf, int16_t *pMCU, int *iOffset, int 
 int iBit = *iBitnum;
 int iOff = *iOffset;
 int iRun, iIndex, iErr;
-signed int iLevel;
+int32_t iLevel;
 uint32_t ulBits, ulCode, ulVal;
 int bLast;
 
@@ -2171,11 +2174,11 @@ int bLast;
  *  PURPOSE    : Apply bidirectional motion compensation to predicted MB.   *
  *                                                                          *
  ****************************************************************************/
-void H263MotCompAVG(int x, int y, signed int *pMVs, signed short *pMCUDest, H263STATE *pVideo)
+void H263MotCompAVG(int x, int y, int32_t *pMVs, int16_t *pMCUDest, H263STATE *pVideo)
 {
-signed short sF, sB, *pSF, *pSB, *pD;
-signed int i, dxF, dyF, dxB, dyB, cx, cy, iTypeF, iTypeB;
-signed int lyF, lyB;
+int16_t sF, sB, *pSF, *pSB, *pD;
+int32_t i, dxF, dyF, dxB, dyB, cx, cy, iTypeF, iTypeB;
+int32_t lyF, lyB;
 
    // determine the type of pixel capture
    iTypeF = 0;
@@ -2311,7 +2314,7 @@ signed int lyF, lyB;
  *  PURPOSE    : Apply motion compensation to predicted MacroBlock.         *
  *                                                                          *
  ****************************************************************************/
-void H263MotComp(int x, int y, signed int iMV_X, signed int iMV_Y, signed short *pMCUDest, H263STATE *pVideo, int bBackward)
+void H263MotComp(int x, int y, int32_t iMV_X, int32_t iMV_Y, int16_t *pMCUDest, H263STATE *pVideo, int bBackward)
 {
 int16_t s, *pS, *pD;
 int32_t i, dx, dy, cx, cy, iType;
