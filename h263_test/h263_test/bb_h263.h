@@ -35,6 +35,22 @@
 #include <arm_neon.h>
 #define HAS_NEON
 #endif
+#if defined (ARDUINO_ARCH_ESP32) && !defined(NO_SIMD)
+#if __has_include ("dsps_fft2r_platform.h")
+#include "dsps_fft2r_platform.h"
+#if (dsps_fft2r_sc16_aes3_enabled == 1)
+#define HAS_S3_SIMD
+#ifdef __cplusplus
+extern "C" {
+#endif // cpp
+void s3_simd_mb(uint8_t u8Type, int16_t *pS, int16_t *pD, uint32_t iPitch, int16_t *pConstants);
+#ifdef __cplusplus
+}
+#endif // cpp
+int16_t __attribute__((aligned (16))) s3_mb_constants[4] = {1, -2048, 2047, 2};
+#endif // S3 SIMD
+#endif // __has_include
+#endif // ESP32
 
 #define DCTSIZE2 64
 #define MB_LOWER -2048
@@ -2305,6 +2321,9 @@ int iFrameCX = pVideo->iFrameCX; // keep local copy to help compiler make better
       } else {// don't check borders
          pS += (x*16)+ dx + ((i&1)<<3); // horiz address
          pS += ((y*16) + dy + ((i&2)<<2)) * iFrameCX;
+#ifdef HAS_S3_SIMD
+          s3_simd_mb(iType, pS, pD, iFrameCX*2, s3_mb_constants);
+#else
          switch (iType) {
             case 0: // full pel in both dirs
 #ifdef HAS_NEON
@@ -2442,8 +2461,9 @@ int iFrameCX = pVideo->iFrameCX; // keep local copy to help compiler make better
 #endif
                break;
             } // switch on MV type
-         }
-      }
+#endif // HAS_S3_SIMD
+         } // no border checks
+      } // for each of the 4 Y blocks
 
    // determine the type of pixel capture
    iType = 0;
@@ -2544,6 +2564,9 @@ int iFrameCX = pVideo->iFrameCX; // keep local copy to help compiler make better
          } else { // don't check borders
          pS += x*8 + dx; // horiz address
          pS += ((y*8) + dy) * iWidth2;
+#ifdef HAS_S3_SIMD
+          s3_simd_mb(iType, pS, pD, iFrameCX*2, s3_mb_constants);
+#else // S3_SIMD
          switch (iType) {
             case 0: // full pel x,y
 #ifdef HAS_NEON
@@ -2678,8 +2701,9 @@ int iFrameCX = pVideo->iFrameCX; // keep local copy to help compiler make better
 #endif
                break;
             } // switch on type
-         }
-      }
+#endif // HAS_S3_SIMD
+         } // no border checks
+      } // for i
 } /* H263MotComp() */
 
 #endif // __BB_H263__
