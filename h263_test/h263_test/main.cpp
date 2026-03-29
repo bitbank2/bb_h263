@@ -134,6 +134,7 @@ int iTime;
     
     printf("H263 test\n");
 //    rc = h263.open("/Users/laurencebank/Downloads/homer_car_h263.mov", VideoDraw);
+//    rc = h263.open("/Users/laurencebank/Downloads/homer2.mov");
     rc = h263.open("/Users/laurencebank/Downloads/matrix_h263.mov");
     if (rc == H263_SUCCESS) {
         printf("Video opened successfully\n");
@@ -141,14 +142,14 @@ int iTime;
         h = h263.getHeight();
         printf("Size: %d x %d, %d frames\n", w, h, h263.getFrameCount());
         pBuf = (uint8_t *)malloc(w * h *2);
-        h263.setFrameBuf(pBuf, w * 2);
+        h263.setFramebuffer(pBuf, w * 2);
         iFrame = 0;
         iTime = MilliTime();
         while (rc == H263_SUCCESS) {
             rc = h263.decodeFrame(0, 0);
- //           printf("frame: %d\n", iFrame++);
- //           if (iFrame == 4) {
- //               WriteBMP("/Users/laurencebank/Downloads/matrix_test.bmp", pBuf, NULL, w, h, 16);
+//            printf("frame: %d\n", iFrame++);
+//            if (iFrame == 4) {
+//                WriteBMP("/Users/laurencebank/Downloads/matrix_test.bmp", pBuf, NULL, w, h, 16);
 //            }
         } // while video isn't finished
         h263.close();
