@@ -51,7 +51,7 @@ void setup()
       xoff = (lcd.width() - w)/2;
       yoff = (lcd.height() - h)/2;
       pBuf = (uint8_t *)malloc(w * h *2);
-      h263.setFrameBuf(pBuf, w * 2);
+      h263.setFramebuffer(pBuf, w * 2);
       for (int iLoop = 0; iLoop <5; iLoop++) {
         iFrame = 0;
         rc = H263_SUCCESS;
@@ -62,6 +62,7 @@ void setup()
             }
             bReady = true; // draw it
             //ShowFrame(pBuf, w, h, xoff, yoff);
+            Serial.printf("Finished frame %d\n", iFrame);
             iFrame++;
         }
       }

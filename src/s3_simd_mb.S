@@ -20,7 +20,7 @@
 // 1: half pel x, full pel y
 // 2: full pel x, half pel y
 // 3: half pel x,y
-//                               A2            A3            A4           A5               A6        A7
+//                               A2            A3            A4           A5               A6 
 // Call as void s3_simd_mb(uint8_t u8Type, int16_t *pS, int16_t *pD, uint32_t iPitch, int16_t *pConstants);
   s3_simd_mb:
     .align 4

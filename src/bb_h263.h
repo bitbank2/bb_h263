@@ -19,6 +19,11 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //
+// bb_h263 is an H.263 video decoder/player contained in a single .H file
+// It is written in portable C code with a C++ class wrapper to simplify it's use
+// The project includes example code for use on Arduino and Linux
+// The decoder currently supports the original H.263 standard, but not the H.263+ (yet)
+//
 #ifndef __BB_H263__
 #define __BB_H263__
 
@@ -29,6 +34,29 @@
 #if (__ARM_ARCH >= 7) || defined(__arm64__) || defined(__aarch64__)
 #include <arm_neon.h>
 #define HAS_NEON
+#endif
+#if defined (ARDUINO_ARCH_ESP32) && !defined(NO_SIMD)
+#if __has_include ("dsps_fft2r_platform.h")
+#include "dsps_fft2r_platform.h"
+#if (dsps_fft2r_sc16_aes3_enabled == 1)
+#define HAS_S3_SIMD
+#define MALLOC(x) heap_caps_aligned_alloc(16, x, MALLOC_CAP_SPIRAM);
+#ifdef __cplusplus
+extern "C" {
+#endif // cpp
+void s3_simd_mb(uint8_t u8Type, int16_t *pS, int16_t *pD, uint32_t iPitch, int16_t *pConstants);
+void s3_ycbcr_convert_420(uint16_t *pY, uint16_t *pCB, uint16_t *pCR, uint16_t *pOut, int16_t *pConsts, uint8_t ucPixelType);
+#ifdef __cplusplus
+}
+#endif // cpp
+int16_t s3_mb_constants[4] = {1, -2048, 2047, 2};
+int16_t i16_Consts[8] = {0x80, 113, 90, 22, 46, 1,32,2048};
+#endif // S3 SIMD
+#endif // __has_include
+#endif // ESP32
+
+#ifndef MALLOC
+#define MALLOC(x) malloc(x)
 #endif
 
 #define DCTSIZE2 64
@@ -48,6 +76,7 @@
 enum {
     H263_SUCCESS = 0,
     H263_DECODE_ERROR,
+    H263_MEMORY_ERROR,
     H263_FILEIO_ERROR,
     H263_NOT_SUPPORTED,
     H263_INVALID_PARAMETER,
@@ -215,7 +244,7 @@ typedef struct tagvideo {
     int iFrameTotal;
     uint32_t iFrameDelay;
     uint8_t u8FileBuf[H263_FILE_BUF_SIZE];
-    int16_t MCUs[6*DCTSIZE2];
+    int16_t *MCUs;
     uint8_t ucIntraQuant[64];
     uint8_t ucNonIntraQuant[64];
     int8_t cMVPredX[128]; // current and previous motion vector predictors
@@ -290,6 +319,8 @@ class BB_H263
 #endif
     void setFramebuffer(uint8_t *pFramebuffer, int iPitch = -1) { _h263.pFramebuffer = pFramebuffer; _h263.iFramePitch = iPitch;}
     uint8_t *getFramebuffer(void) {return _h263.pFramebuffer;}
+    int allocFramebuffer(void);
+    void freeFramebuffer(void);
     void close(void);
     int getWidth() {return _h263.iWidth;}
     int getCurrentFrame() {return _h263.iCurrentFrame;}
@@ -307,6 +338,20 @@ class BB_H263
   private:
     H263STATE _h263;
 }; // class H263
+
+void BB_H263::freeFramebuffer(void)
+{
+    if (_h263.pFramebuffer) {
+        free(_h263.pFramebuffer);
+        _h263.pFramebuffer = nullptr;
+    }
+} /* freeFramebuffer() */
+
+int BB_H263::allocFramebuffer(void)
+{
+    _h263.pFramebuffer = (uint8_t *)MALLOC(_h263.iWidth * _h263.iHeight * 2);
+    return (_h263.pFramebuffer == nullptr) ? H263_MEMORY_ERROR : H263_SUCCESS;
+} /* allocFramebuffer() */
 
 int BB_H263::openInternal(void)
 {
@@ -358,7 +403,9 @@ int BB_H263::openInternal(void)
         _h263.pAudioList = (uint32_t *)malloc((_h263.iIndexLen - (_h263.iFrameTotal*16))/4);
     }
     iFrame = iAudio = 0; // index output
-    (*_h263.pfnSeek)(&_h263.H263File, _h263.iIndex); // start of index
+    if (_h263.H263File.fHandle) {
+        (*_h263.pfnSeek)(&_h263.H263File, _h263.iIndex); // start of index
+    }
     iLen = _h263.iIndexLen;
     iOffset = 0;
     if (iLen == 0) {
@@ -367,7 +414,9 @@ int BB_H263::openInternal(void)
     }
     u32MaxLen = 0; // keep track of the biggest blob of compressed frame data
     for (i = 0; i<iLen; i += 256) { // what fits in our temp buffer
-        (*_h263.pfnRead)(&_h263.H263File, s, 256); // read a block of data
+        if (_h263.H263File.fHandle) {
+            (*_h263.pfnRead)(&_h263.H263File, s, 256); // read a block of data
+        }
         if (_h263.u8FileType == H263_FILE_AVI) {
             for (j = 0; j < 256/16; j++) {
                 u32 = _h263.iMovie + *(uint32_t *)&s[(j * 16) + 8] - 4;
@@ -385,7 +434,7 @@ int BB_H263::openInternal(void)
                 }
                 if (iFrame == _h263.iFrameTotal) {
                     // break out of the loop
-                    j = 256; i = _h263.iIndexLen;
+                    j = 256; i = iLen;
                 }
             } // for j
         } else { // Quicktime
@@ -395,18 +444,22 @@ int BB_H263::openInternal(void)
                 _h263.pFrameList[iFrame++] = u32;
                 if (iFrame == _h263.iFrameTotal) {
                     // break out of the loop
-                    j = 256; i = _h263.iIndexLen;
+                    j = 256; i = iLen;
                 }
             } // for j
         }
     } // for i
     if (_h263.u8FileType == H263_FILE_QT) { // Get the frame lengths (separate atom)
         uint32_t iFrameOff = _h263.iMovie; // in case no frame offsets in file
-        (*_h263.pfnSeek)(&_h263.H263File, _h263.iIndexSizes); // start of index of data sizes
+        if (_h263.H263File.fHandle) {
+            (*_h263.pfnSeek)(&_h263.H263File, _h263.iIndexSizes); // start of index of data sizes
+        }
         iLen = _h263.iFrameTotal*4; // Quicktime which uses atom sizes instead of offsets
         iFrame = 0;
         for (i = 0; i<iLen; i += 256) { // what fits in our temp buffer
-            (*_h263.pfnRead)(&_h263.H263File, s, 256); // read a block of data
+            if (_h263.H263File.fHandle) {
+                (*_h263.pfnRead)(&_h263.H263File, s, 256); // read a block of data
+            }
             for (j = 0; j < 256/4; j++) {
                 u32 = MOTOLONG(&s[(j * 4)]);
                 if (_h263.iIndex == 0) { // no index present, make one
@@ -417,7 +470,7 @@ int BB_H263::openInternal(void)
                 if (u32 > u32MaxLen) u32MaxLen = u32;
                 if (iFrame == _h263.iFrameTotal) {
                     // break out of the loop
-                    j = 256; i = _h263.iIndexLen;
+                    j = 256; i = iLen;
                 }
             } // for j
         } // for i
@@ -640,6 +693,7 @@ void H263_close(H263STATE *pH263) {
         pH263->pACTables = NULL;
     }
     if (pH263->pBRef[0]) {
+        free(pH263->MCUs); pH263->MCUs = NULL;
         free(pH263->pBRef[0]); pH263->pBRef[0] = NULL;
         free(pH263->pBRef[1]); pH263->pBRef[1] = NULL;
         free(pH263->pBRef[2]); pH263->pBRef[2] = NULL;
@@ -1454,6 +1508,19 @@ int iCol;
                pY += 64;
            }
         } // for each row
+#elif defined HAS_S3_SIMD
+    pY = (int16_t *)&pMCU[MCU0];
+    for (iRow=0; iRow<= iMaxRow; iRow++) {
+        s3_ycbcr_convert_420(pY, pCb, pCr, ulDest, i16_Consts, pVideo->u8PixelType);
+        pY += 8;
+        ulDest += iPitch/4;
+        s3_ycbcr_convert_420(pY, pCb, pCr, ulDest, i16_Consts, pVideo->u8PixelType);
+        pCr += 8; pCb += 8; pY += 8; // next pair of rows
+        ulDest += iPitch/4;
+        if (iRow == 3) { // halfway down, switch to next 2 MCUs
+            pY += 64;
+        }
+    } // for each pair of rows
 #else
    for (iRow=0; iRow <= iMaxRow; iRow++) {
        pY = (int16_t *)&pMCU[MCU0 + iRowOffsets[iRow]];
@@ -1875,12 +1942,13 @@ uint8_t *pTables;
     if (pVideo->iFrameCX == 0) { // need to allocate predictor pages
       x = pVideo->iFrameCX = iTrueWidth<<4;
       y = pVideo->iFrameCY = iTrueHeight<<4;
-      pVideo->pBRef[0] = (int16_t *) malloc(x * y * sizeof(int16_t)); // Luma prediction
-      pVideo->pBRef[1] = (int16_t *) malloc(((x * y) >> 2)*sizeof(int16_t)); // Chroma1 prediction
-      pVideo->pBRef[2] = (int16_t *) malloc(((x * y) >> 2)*sizeof(int16_t)); // Chroma2 prediction
-      pVideo->pFRef[0] = (int16_t *) malloc(x * y * sizeof(int16_t)); // Luma prediction
-      pVideo->pFRef[1] = (int16_t *) malloc(((x * y) >> 2)*sizeof(int16_t)); // Chroma1 prediction
-      pVideo->pFRef[2] = (int16_t *) malloc(((x * y) >> 2)*sizeof(int16_t)); // Chroma2 prediction
+      pVideo->MCUs = (int16_t *)MALLOC(6*DCTSIZE2);
+      pVideo->pBRef[0] = (int16_t *) MALLOC(x * y * sizeof(int16_t)); // Luma prediction
+      pVideo->pBRef[1] = (int16_t *) MALLOC(((x * y) >> 2)*sizeof(int16_t)); // Chroma1 prediction
+      pVideo->pBRef[2] = (int16_t *) MALLOC(((x * y) >> 2)*sizeof(int16_t)); // Chroma2 prediction
+      pVideo->pFRef[0] = (int16_t *) MALLOC(x * y * sizeof(int16_t)); // Luma prediction
+      pVideo->pFRef[1] = (int16_t *) MALLOC(((x * y) >> 2)*sizeof(int16_t)); // Chroma1 prediction
+      pVideo->pFRef[2] = (int16_t *) MALLOC(((x * y) >> 2)*sizeof(int16_t)); // Chroma2 prediction
       }
    iMBMax = iTrueWidth * iTrueHeight;
    cQuant = (uint8_t)(ulBits >> (27-iBit)) & 0x1f; // get PQUANT (5-bits)
@@ -2045,6 +2113,7 @@ get_mcbpc:
        }
       pVideo->ulBits = ulBits; // pass current bits forward
   // Decode the 6 blocks comprising the macroblock
+       pMCU = pVideo->MCUs;
       memset(pMCU, 0, DCTSIZE2*6*sizeof(int16_t)); // clear this MB to start
       ucCBPY <<= 2;
       ucCBPY |= ucCBPC; // combine bits of Y with CbCr bits
@@ -2300,6 +2369,9 @@ int iFrameCX = pVideo->iFrameCX; // keep local copy to help compiler make better
       } else {// don't check borders
          pS += (x*16)+ dx + ((i&1)<<3); // horiz address
          pS += ((y*16) + dy + ((i&2)<<2)) * iFrameCX;
+#ifdef HAS_S3_SIMD
+         s3_simd_mb(iType, pS, pD, iFrameCX*2, s3_mb_constants);
+#else
          switch (iType) {
             case 0: // full pel in both dirs
 #ifdef HAS_NEON
@@ -2437,8 +2509,9 @@ int iFrameCX = pVideo->iFrameCX; // keep local copy to help compiler make better
 #endif
                break;
             } // switch on MV type
-         }
-      }
+#endif // HAS_S3_SIMD
+         } // no border checks
+      } // for each of the 4 Y blocks
 
    // determine the type of pixel capture
    iType = 0;
@@ -2539,6 +2612,9 @@ int iFrameCX = pVideo->iFrameCX; // keep local copy to help compiler make better
          } else { // don't check borders
          pS += x*8 + dx; // horiz address
          pS += ((y*8) + dy) * iWidth2;
+#ifdef HAS_S3_SIMD
+        s3_simd_mb(iType, pS, pD, iFrameCX, s3_mb_constants);
+#else // S3_SIMD
          switch (iType) {
             case 0: // full pel x,y
 #ifdef HAS_NEON
@@ -2673,8 +2749,9 @@ int iFrameCX = pVideo->iFrameCX; // keep local copy to help compiler make better
 #endif
                break;
             } // switch on type
-         }
-      }
+#endif // HAS_S3_SIMD
+         } // no border checks
+      } // for i
 } /* H263MotComp() */
 
 #endif // __BB_H263__
