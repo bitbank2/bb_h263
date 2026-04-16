@@ -27,10 +27,22 @@
 #ifndef __BB_H263__
 #define __BB_H263__
 
+// Define this macro if your CPU requires aligned 2 and 4-byte reads
+// This will slow down the compressed data decoding by a small amount
+//#define REQUIRES_ALIGNED
+
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef __x86_64__
+#include <emmintrin.h>
+#include <tmmintrin.h>
+#include <smmintrin.h>
+#include <immintrin.h>
+#define HAS_SSE
+#endif
+
 #if (__ARM_ARCH >= 7) || defined(__arm64__) || defined(__aarch64__)
 #include <arm_neon.h>
 #define HAS_NEON
@@ -68,8 +80,13 @@ int16_t i16_Consts[8] = {0x80, 113, 90, 22, 46, 1,32,2048};
 #define MCU3 (DCTSIZE2*3)
 #define MCU4 (DCTSIZE2*4)
 #define MCU5 (DCTSIZE2*5)
+#ifdef REQUIRES_ALIGNED
+#define MOTOSHORT(p) (((*(p))<<8) + (*(p+1)))
+#define MOTOLONG(p) (((*p)<<24) + ((*(p+1))<<16) + ((*(p+2))<<8) + (*(p+3)))
+#else
 #define MOTOSHORT(p) (__builtin_bswap16(*(uint16_t *)p))
 #define MOTOLONG(p) (__builtin_bswap32(*(uint32_t *)p))
+#endif
 #define H263_FILE_BUF_SIZE 2048
 #define H263_FILE_BUF_HIGHWATER (H263_FILE_BUF_SIZE / 2)
 
@@ -477,7 +494,7 @@ int BB_H263::openInternal(void)
     }
     _h263.u32MaxFrameLength = u32MaxLen;
     //printf("max len = %d\n", u32MaxLen);
-    _h263.pFrameData = (uint8_t *)malloc(u32MaxLen); // allocate a buffer for the compressed data
+    _h263.pFrameData = (uint8_t *)malloc(u32MaxLen + 8); // allocate a buffer for the compressed data
     _h263.iAudioTotal = iAudio; // number of audio packets
     return H263_SUCCESS;
 
@@ -1942,7 +1959,7 @@ uint8_t *pTables;
     if (pVideo->iFrameCX == 0) { // need to allocate predictor pages
       x = pVideo->iFrameCX = iTrueWidth<<4;
       y = pVideo->iFrameCY = iTrueHeight<<4;
-      pVideo->MCUs = (int16_t *)MALLOC(6*DCTSIZE2);
+      pVideo->MCUs = (int16_t *)MALLOC(6*DCTSIZE2*sizeof(uint16_t));
       pVideo->pBRef[0] = (int16_t *) MALLOC(x * y * sizeof(int16_t)); // Luma prediction
       pVideo->pBRef[1] = (int16_t *) MALLOC(((x * y) >> 2)*sizeof(int16_t)); // Chroma1 prediction
       pVideo->pBRef[2] = (int16_t *) MALLOC(((x * y) >> 2)*sizeof(int16_t)); // Chroma2 prediction
@@ -2272,6 +2289,9 @@ int32_t lx, ly, nx, ny, iWidth2;
 int bCheckBorders;
 int iFrameCX = pVideo->iFrameCX; // keep local copy to help compiler make better code
     
+    if (y == 0 && x != 0) {
+        x |= 0;
+    }
    // determine the type of pixel capture
    iType = 0;
    if (iMV_X & 1) // half-pel on X
@@ -2282,10 +2302,11 @@ int iFrameCX = pVideo->iFrameCX; // keep local copy to help compiler make better
    dy = (iMV_Y >> 1);
 
    // See if it overlaps any edge of the picture
-   bCheckBorders = 1;
    if ((x<<4)+dx >= 0 && (y<<4)+dy >= 0 &&
       (x<<4)+dx+15 < pVideo->iFrameCX && (y<<4)+dy+15 < pVideo->iFrameCY) { // we can do it faster if we don't have to test each pixel
        bCheckBorders = 0;
+   } else {
+       bCheckBorders = 1;
    }
    // do the luma blocks
    for (i=0; i<4; i++) {
@@ -2524,12 +2545,12 @@ int iFrameCX = pVideo->iFrameCX; // keep local copy to help compiler make better
 
    // See if it overlaps any edge of the picture
    iWidth2 = (iFrameCX>>1);
-   bCheckBorders = 1;
    if ((x<<3)+dx >= 0 && (y<<3)+dy >= 0 &&
-      (x<<3)+dx+7 < (iFrameCX>>1) && (y<<3)+dy+7 < (pVideo->iFrameCY>>1))
-      { // we can do it faster if we don't have to test each pixel
+      (x<<3)+dx+7 < (iFrameCX>>1) && (y<<3)+dy+7 < (pVideo->iFrameCY>>1)) { // we can do it faster if we don't have to test each pixel
       bCheckBorders = 0;
-      }
+   } else {
+       bCheckBorders = 1;
+   }
 
    // Local x,y
    lx = (x<<3) + dx;

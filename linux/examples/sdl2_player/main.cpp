@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <bb_h263.h>
+#include "../../../src/bb_h263.h"
 #include <time.h>
 
 BB_H263 h263;
@@ -13,10 +13,6 @@ BB_H263 h263;
 
 //#define PIXEL_TYPE GIF_PALETTE_RGB8888
 //#define BITS_PER_PIXEL 32
-
-void Draw(H263DRAW *pDraw)
-{
-}
 
 int main(int argc, char *argv[])
 {
@@ -28,13 +24,13 @@ int main(int argc, char *argv[])
         printf("sdl2 h.263 player\nUsage: sdl2_play <filename>\n");
         return -1;
     }
-    rc = h263.open(argv[1], Draw);
+    rc = h263.open(argv[1]);
     if (rc != H263_SUCCESS) {
     	printf("Error opening %s = %d\n", argv[1], rc);
     	return -1;
     }
     w = h263.getWidth(); h = h263.getHeight();
-    printf("%s opened, size: %d x %d\n", argv[1], w, h);
+    printf("opened, size: %d x %d\n", w, h);
  
     if (SDL_Init(SDL_INIT_EVERYTHING) != 0) {
         printf("SDL_Init Error: %s\n", SDL_GetError());
@@ -58,7 +54,7 @@ int main(int argc, char *argv[])
 	SDL_Quit();
 	return EXIT_FAILURE;
     }
-    h263.setFrameBuf((uint8_t *)canvas->pixels); // draw into the SDL2 buffer
+    h263.setFramebuffer((uint8_t *)canvas->pixels, w*2); // draw into the SDL2 buffer
     winSurface = SDL_GetWindowSurface(win);
     
     bool bQuit = false;
@@ -67,12 +63,15 @@ int main(int argc, char *argv[])
         while (!bQuit && rc == H263_SUCCESS) {
             SDL_Rect rect;
             SDL_Event e;
-            rc = h263.decodeFrame();
+            // The first time through, the window hasn't been created
+            // The event polling loop must run BEFORE accessing the surface
+            // display pointer because it hasn't been allocated yet
             while (SDL_PollEvent(&e)) { // take care of queued events
                 if (e.type == SDL_QUIT || e.type == SDL_KEYDOWN) {
                     bQuit = true;
                 }
             }
+            rc = h263.decodeFrame();
             rect.x = 0; rect.y = 0; // corner offset
             rect.w = h263.getWidth(); rect.h = h263.getHeight();
             SDL_BlitSurface(canvas, &rect, winSurface, &rect);

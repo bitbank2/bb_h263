@@ -14,7 +14,7 @@ BB_H263 h263;
 
 int main(int argc, const char * argv[]) {
     int rc, w, h, iFrame;
-//    rc = h263.open(homer_car_h263, sizeof(homer_car_h263));
+//    rc = h263.open("/Users/laurencebank/Downloads/matrix_h263.mov");
     rc = h263.open("/Users/laurencebank/Downloads/homer_car_h263.mov");
     if (rc == H263_SUCCESS) {
         w = h263.getWidth();
