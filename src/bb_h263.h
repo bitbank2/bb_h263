@@ -45,14 +45,14 @@
 
 #if (__ARM_ARCH >= 7) || defined(__arm64__) || defined(__aarch64__)
 #include <arm_neon.h>
-#define HAS_NEON
+//#define HAS_NEON
 #endif
 #if defined (ARDUINO_ARCH_ESP32) && !defined(NO_SIMD)
 #if __has_include ("dsps_fft2r_platform.h")
 #include "dsps_fft2r_platform.h"
 #if (dsps_fft2r_sc16_aes3_enabled == 1)
-#define HAS_S3_SIMD
-#define MALLOC(x) heap_caps_aligned_alloc(16, x, MALLOC_CAP_SPIRAM);
+//#define HAS_S3_SIMD
+#define MALLOC_ALIGNED(x) heap_caps_aligned_alloc(16, x, MALLOC_CAP_SPIRAM);
 #ifdef __cplusplus
 extern "C" {
 #endif // cpp
@@ -67,9 +67,17 @@ int16_t i16_Consts[8] = {0x80, 113, 90, 22, 46, 1,32,2048};
 #endif // __has_include
 #endif // ESP32
 
-#ifndef MALLOC
+#ifdef TRACE_MEMORY
+#define MALLOC(x) trace_malloc(x)
+#ifndef MALLOC_ALIGNED
+#define MALLOC_ALIGNED(x) trace_malloc(x)
+#endif // !MALLOC_ALIGNED
+#else
 #define MALLOC(x) malloc(x)
-#endif
+#ifndef MALLOC_ALIGNED
+#define MALLOC_ALIGNED(x) malloc(x)
+#endif // !MALLOC_ALIGNED
+#endif // TRACE_MEMORY
 
 #define DCTSIZE2 64
 #define MB_LOWER -2048
@@ -89,6 +97,21 @@ int16_t i16_Consts[8] = {0x80, 113, 90, 22, 46, 1,32,2048};
 #endif
 #define H263_FILE_BUF_SIZE 2048
 #define H263_FILE_BUF_HIGHWATER (H263_FILE_BUF_SIZE / 2)
+//
+// Keep track of memory allocations
+//
+void * trace_malloc(size_t size)
+{
+static uint32_t iTotal = 0;
+    
+    iTotal += size;
+#ifdef ARDUINO
+    Serial.printf("malloc size = %d, total = %d\n", (int)size, (int)iTotal);
+#else
+    printf("malloc size = %d, total = %d\n", (int)size, (int)iTotal);
+#endif // !ARDUINO
+    return malloc(size);
+} /* trace_malloc() */
 
 enum {
     H263_SUCCESS = 0,
@@ -209,6 +232,16 @@ typedef int32_t (H263_SEEK_CALLBACK)(H263FILE *pFile, int32_t iPosition);
 typedef void * (H263_OPEN_CALLBACK)(const char *szFilename, uint32_t *pFileSize);
 typedef void (H263_CLOSE_CALLBACK)(void *pHandle);
 
+#ifndef __BB_RECT__
+#define __BB_RECT__
+typedef struct bbepr {
+    int x;
+    int y;
+    int w;
+    int h;
+} BB_RECT;
+#endif // __BB_RECT__
+
 typedef struct tagvideo {
     int iWidth;
     int iHeight;
@@ -269,6 +302,7 @@ typedef struct tagvideo {
     uint8_t ucPelAspect, cQuantizerScale, u8PixelType, u8AudioChannels;
     uint8_t u8SoundBits, u8AudioType, u8FileType;
     uint16_t *usYUVRGB; // lookup table for colorspace conversion
+    BB_RECT clipRect;
 } H263STATE;
 
 // Forward declarations
@@ -334,6 +368,8 @@ class BB_H263
 #if defined( __LINUX__ ) || defined ( __MACH__ )
     int open(const char *szFilename);
 #endif
+    int setClipRect(BB_RECT *pRect);
+    int getClipRect(BB_RECT *pRect);
     void setFramebuffer(uint8_t *pFramebuffer, int iPitch = -1) { _h263.pFramebuffer = pFramebuffer; _h263.iFramePitch = iPitch;}
     uint8_t *getFramebuffer(void) {return _h263.pFramebuffer;}
     int allocFramebuffer(void);
@@ -356,6 +392,37 @@ class BB_H263
     H263STATE _h263;
 }; // class H263
 
+int BB_H263::setClipRect(BB_RECT *pRect)
+{
+    uint16_t x, y, w, h;
+    // Adjust to be on macroblock boundaries and within the frame size
+    if (pRect) {
+        x = (pRect->x & 0xfff0);
+        y = (pRect->y & 0xfff0);
+        w = (pRect->w + 15) & 0xfff0;
+        h = (pRect->h + 15) & 0xfff0;
+        if (x > _h263.iWidth || x + w > _h263.iWidth) return H263_INVALID_PARAMETER;
+        if (y > _h263.iHeight || y + h > _h263.iHeight) return H263_INVALID_PARAMETER;
+    
+        _h263.clipRect.x = x;
+        _h263.clipRect.y = y;
+        _h263.clipRect.w = w;
+        _h263.clipRect.h = h;
+        return H263_SUCCESS;
+    }
+    return H263_INVALID_PARAMETER;
+} /* setClipRect() */
+
+int BB_H263::getClipRect(BB_RECT *pRect)
+{
+    if (!pRect) return H263_INVALID_PARAMETER;
+    pRect->x = _h263.clipRect.x;
+    pRect->y = _h263.clipRect.y;
+    pRect->w = _h263.clipRect.w;
+    pRect->h = _h263.clipRect.h;
+    return H263_SUCCESS;
+} /* getClipRect() */
+
 void BB_H263::freeFramebuffer(void)
 {
     if (_h263.pFramebuffer) {
@@ -366,7 +433,14 @@ void BB_H263::freeFramebuffer(void)
 
 int BB_H263::allocFramebuffer(void)
 {
-    _h263.pFramebuffer = (uint8_t *)MALLOC(_h263.iWidth * _h263.iHeight * 2);
+    if (_h263.clipRect.w) {
+        // User specified a clip rectangle; create the framebuffer of that size
+        _h263.pFramebuffer = (uint8_t *)MALLOC_ALIGNED(_h263.clipRect.w * _h263.clipRect.h * sizeof(uint16_t));
+        _h263.iFramePitch = _h263.clipRect.w * sizeof(uint16_t);
+    } else {
+        _h263.pFramebuffer = (uint8_t *)MALLOC_ALIGNED(_h263.iWidth * _h263.iHeight * sizeof(uint16_t));
+        _h263.iFramePitch = _h263.iWidth * sizeof(uint16_t);
+    }
     return (_h263.pFramebuffer == nullptr) ? H263_MEMORY_ERROR : H263_SUCCESS;
 } /* allocFramebuffer() */
 
@@ -1406,9 +1480,13 @@ int iCol;
     uint32_t ulPixel;
     const int iPitch32 = iPitch/4; // pitch in uint32_t's
 #endif
-//    if (pVideo->iOptions & PIL_CONVERT_16BPP)
-//       lsize >>= 2; // for longs
-
+    // Adjust position for clipped output
+    if (pVideo->clipRect.w) {
+        x -= (pVideo->clipRect.x >> 4);
+        if (x < 0 || (x<<4) >= pVideo->clipRect.w) return; // not visible
+        y -= (pVideo->clipRect.y >> 4);
+        if (y < 0 || (y<<4) >= pVideo->clipRect.h) return;
+    }
    pCb = (int16_t *)&pMCU[MCU4];
    pCr = (int16_t *)&pMCU[MCU5];
 
@@ -1728,7 +1806,7 @@ void PrepVideoStruct(H263STATE *pVideo)
 {
 int i, j;
 
-   pVideo->usYUVRGB = (uint16_t *)malloc(0x20000);
+   pVideo->usYUVRGB = (uint16_t *)MALLOC(0x20000);
    pVideo->iCurrentFrame = 0;
    pVideo->iFRefFrame = -1;
     
@@ -1813,7 +1891,7 @@ uint8_t *pTables;
             pVideo->iFramePitch = pVideo->iWidth * 2; // set default pitch
         }
         PrepVideoStruct(pVideo);
-        pTables = (uint8_t *) malloc(8192 * 2 * sizeof(uint32_t) + 128 + 8192 + 1024);
+        pTables = (uint8_t *) MALLOC(8192 * 2 * sizeof(uint32_t) + 128 + 8192 + 1024);
         pVideo->pACTables = (uint16_t *)pTables;
         pMVTable = (uint16_t *)pTables;
         pMCBPCTable = (uint16_t *)&pTables[1024];
@@ -1957,16 +2035,16 @@ uint8_t *pTables;
         iTrueHeight = iH263Formats[cSourceFormat*2+1];
     }
     if (pVideo->iFrameCX == 0) { // need to allocate predictor pages
-      x = pVideo->iFrameCX = iTrueWidth<<4;
-      y = pVideo->iFrameCY = iTrueHeight<<4;
-      pVideo->MCUs = (int16_t *)MALLOC(6*DCTSIZE2*sizeof(uint16_t));
-      pVideo->pBRef[0] = (int16_t *) MALLOC(x * y * sizeof(int16_t)); // Luma prediction
-      pVideo->pBRef[1] = (int16_t *) MALLOC(((x * y) >> 2)*sizeof(int16_t)); // Chroma1 prediction
-      pVideo->pBRef[2] = (int16_t *) MALLOC(((x * y) >> 2)*sizeof(int16_t)); // Chroma2 prediction
-      pVideo->pFRef[0] = (int16_t *) MALLOC(x * y * sizeof(int16_t)); // Luma prediction
-      pVideo->pFRef[1] = (int16_t *) MALLOC(((x * y) >> 2)*sizeof(int16_t)); // Chroma1 prediction
-      pVideo->pFRef[2] = (int16_t *) MALLOC(((x * y) >> 2)*sizeof(int16_t)); // Chroma2 prediction
-      }
+        x = pVideo->iFrameCX = iTrueWidth<<4;
+        y = pVideo->iFrameCY = iTrueHeight<<4;
+        pVideo->MCUs = (int16_t *)MALLOC_ALIGNED(6*DCTSIZE2*sizeof(uint16_t));
+        pVideo->pBRef[0] = (int16_t *) MALLOC_ALIGNED(x * y * sizeof(int16_t)); // Luma prediction
+        pVideo->pBRef[1] = (int16_t *) MALLOC_ALIGNED(((x * y) >> 2)*sizeof(int16_t)); // Chroma1 prediction
+        pVideo->pBRef[2] = (int16_t *) MALLOC_ALIGNED(((x * y) >> 2)*sizeof(int16_t)); // Chroma2 prediction
+        pVideo->pFRef[0] = (int16_t *) MALLOC_ALIGNED(x * y * sizeof(int16_t)); // Luma prediction
+        pVideo->pFRef[1] = (int16_t *) MALLOC_ALIGNED(((x * y) >> 2)*sizeof(int16_t)); // Chroma1 prediction
+        pVideo->pFRef[2] = (int16_t *) MALLOC_ALIGNED(((x * y) >> 2)*sizeof(int16_t)); // Chroma2 prediction
+    }
    iMBMax = iTrueWidth * iTrueHeight;
    cQuant = (uint8_t)(ulBits >> (27-iBit)) & 0x1f; // get PQUANT (5-bits)
    iBit += 5;
@@ -1993,6 +2071,7 @@ uint8_t *pTables;
    memset(pVideo->cMVPredX, 0, 128);
    memset(pVideo->cMVPredY, 0, 128);
    for (iMB=0; iMB<iMBMax && !iErr; iMB++) {
+       int bSkip = 0; // TRUE indicates that this MB is outside of the clip area
       GETMOREBITS
       GETMOREBITS8
       // Get the GOB header if present
@@ -2039,15 +2118,21 @@ uint8_t *pTables;
 //         iMB = iGOB * iMBCount; // reset position to new GOB
          } // read GOB header
 get_mcbpc:
+       if (pVideo->clipRect.w) { // a clipping rectangle is defined
+           int tx = x << 4, ty = y << 4; // convert to pixels
+           bSkip = (tx < pVideo->clipRect.x || tx >= (pVideo->clipRect.x + pVideo->clipRect.w) || ty < pVideo->clipRect.y || ty >= (pVideo->clipRect.y + pVideo->clipRect.h));
+       }
        if (ulPTYPE & 0x10) { // an INTER block has COD (coded macroblock indication)
          ulCode = (ulBits >> (31-iBit)) & 1; // 1 bit COD
          iBit++;
            if (ulCode) { // this MB is NOT coded, skip it
-            iMV_X = iMV_Y = 0; // skipped blocks have a MV of 0,0
-            memset(pMCU, 0, DCTSIZE2*6*sizeof(int16_t));
-            H263MotComp(x, y, iMV_X, iMV_Y, pMCU, pVideo, 0);
-            H263CopyMB(pVideo, x, y, pMCU); // copy the MB to our prediction image
-            goto h263next;
+               if (!bSkip) {
+                   iMV_X = iMV_Y = 0; // skipped blocks have a MV of 0,0
+                   memset(pMCU, 0, DCTSIZE2*6*sizeof(int16_t));
+                   H263MotComp(x, y, iMV_X, iMV_Y, pMCU, pVideo, 0);
+                   H263CopyMB(pVideo, x, y, pMCU); // copy the MB to our prediction image
+               }
+               goto h263next;
             }
          }
       ulCode = (ulBits >> (23-iBit)) & 0x1ff; // 9 bit code for MCBPC
@@ -2137,25 +2222,29 @@ get_mcbpc:
       cMask = 32;
        for (i=0; i<6 && !iErr; i++) { // Get the 6 blocks comprising the macroblock
          iErr = GetH263MCU(pVLCTable, buf, &pMCU[i*DCTSIZE2], &iOff, &iBit, pVideo, cQuant, ucCBPY & cMask, ucMBType);
-           if (ucCBPY & cMask) {
-               H263IDCT(&pMCU[i*DCTSIZE2], (uint32_t)-1);
-           } else if (ucMBType >= 3) { // only have a DC value, distribute it within the block
-            us = pMCU[i*DCTSIZE2 + 0] >> 3; // Get the adjusted DC value
-            for (j=0; j<64; j++)
-               pMCU[i*DCTSIZE2 + j] = us; // store in all cells
-            }
+           if (!bSkip) {
+               if (ucCBPY & cMask) {
+                   H263IDCT(&pMCU[i*DCTSIZE2], (uint32_t)-1);
+               } else if (ucMBType >= 3) { // only have a DC value, distribute it within the block
+                   us = pMCU[i*DCTSIZE2 + 0] >> 3; // Get the adjusted DC value
+                   for (j=0; j<64; j++)
+                       pMCU[i*DCTSIZE2 + j] = us; // store in all cells
+               }
+           }
          cMask >>= 1;
          } // for each of the 6 blocks
       ulBits = pVideo->ulBits; // get the bits back
 // only draw the visible parts of the frame
-       if (ucMBType < 3) { // INTER MB
-          // predict block with motion compensation
-         H263MotComp(x, y, iMV_X, iMV_Y, pMCU, pVideo, 0);
-         }
-      H263CopyMB(pVideo, x, y, pMCU); // copy the MB to our prediction image
-      if (x < iMBCount && y < iGOBCount) {
-            H263PutMCU22(pVideo, x, y, pMCU, -16, -128); // lay down MCU in output image
-         }
+       if (!bSkip) {
+           if (ucMBType < 3) { // INTER MB
+               // predict block with motion compensation
+               H263MotComp(x, y, iMV_X, iMV_Y, pMCU, pVideo, 0);
+           }
+           H263CopyMB(pVideo, x, y, pMCU); // copy the MB to our prediction image
+           if (x < iMBCount && y < iGOBCount) {
+               H263PutMCU22(pVideo, x, y, pMCU, -16, -128); // lay down MCU in output image
+           }
+       }
 h263next:
       pVideo->cMVPredX[x + 64] = (signed char)iMV_X; // store MV
       pVideo->cMVPredY[x + 64] = (signed char)iMV_Y;

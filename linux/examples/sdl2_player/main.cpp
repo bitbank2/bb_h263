@@ -37,7 +37,14 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    win = SDL_CreateWindow("H.263 Player", 352, 288, w, h, SDL_WINDOW_SHOWN);
+    BB_RECT bbr;
+    bbr.x = 16; // clip a 320x240 window from the 352x288 video
+    bbr.y = 16;
+    bbr.w = 320;
+    bbr.h = 240;
+    h263.setClipRect(&bbr);
+    w = 320; h = 240;
+    win = SDL_CreateWindow("H.263 Player", 100, 100, w, h, SDL_WINDOW_SHOWN);
     if (win == nullptr) {
         printf("SDL_CreateWindow Error: %s\n", SDL_GetError());
         return EXIT_FAILURE;
