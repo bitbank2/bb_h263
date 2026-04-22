@@ -2523,8 +2523,8 @@ int iType, iPitch;
            pS += ((y*8) + dy) * iPitch;
        }
 #ifdef HAS_S3_SIMD
-       s3_simd_mb(iType, pS, pD, iPitch*2, s3_mb_constants); // luma blocks
-#elif defined HAS_NEON
+       s3_simd_mb(iType, pS, pD, iPitch*2, s3_mb_constants);
+#elif defined( HAS_NEON )
        neon_simd_mb(iType, pS, pD, iPitch);
 #else // generic C solution
          switch (iType) {

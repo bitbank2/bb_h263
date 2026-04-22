@@ -20,7 +20,9 @@
 // 1: half pel x, full pel y
 // 2: full pel x, half pel y
 // 3: half pel x,y
-//                               A2            A3            A4           A5               A6 
+// The source pointer will often be unaligned, but the destination is aligned
+// on a 16-byte boundary
+//                               A2            A3            A4           A5               A6
 // Call as void s3_simd_mb(uint8_t u8Type, int16_t *pS, int16_t *pD, uint32_t iPitch, int16_t *pConstants);
   s3_simd_mb:
     .align 4
@@ -34,7 +36,9 @@
     beqi a2,3,.half_x_half_y
 // full pixel in both x and y (0)
 .full_x_full_y:
-    ee.vld.128.ip q0,a3,0   # read 8 source values
+    ee.ld.128.usar.ip q0,a3,16   # read 8 source values (unaligned)
+    ee.ld.128.usar.ip q1,a3,-16    # read 8 more to fix alignment
+    ee.src.q q0,q0,q1       # fix alignment using the 16 pixels we read
     ee.vld.128.ip q1,a4,0   # read 8 destination values
     ee.vadds.s16 q0,q1,q0   # sum src+dest
     ee.vmin.s16 q0,q7,q0    # clamp to max of 2047
@@ -49,12 +53,19 @@
 .half_x_full_y:
     movi.n    a9,1          # load the shift register with 1 (for averaging)
     wsr.sar    a9           # put it in the SAR (shift amount register)
-    movi.n    a9,2          # shift bytes 2 (one short) for unaligned col+1
-    wur.sar_byte a9
-    addi.n a5,a5,-16        # adjust source pitch
+    movi.n    a9,2          # 1 pixel = 2 bytes
+    wur.sar_byte a9         # use this as the shift amount
 .h_x_f_y_0:
-    ee.vld.128.ip q0,a3,16  # read 8 source values
-    ee.vld.128.ip q1,a3,0   # read next 8 values to get col+1
+    l32i a9,a3,0            # faster to load it 32-bits at a time
+    ee.movi.32.q q0,a9,0    # since the alignment is not easy
+    l32i a9,a3,4
+    ee.movi.32.q q0,a9,1
+    l32i a9,a3,8
+    ee.movi.32.q q0,a9,2
+    l32i a9,a3,12
+    ee.movi.32.q q0,a9,3    # we now have 8 source values
+    l32i a9,a3,16           # get 2 more pixels to allow col+1
+    ee.movi.32.q q1,a9,0
     ee.src.q q1,q0,q1       # now q1 has the col+1 values
     ee.vld.128.ip q2,a4,0   # read 8 destination values
     ee.vadds.s16 q0,q1,q0   # sum s[cx]+s[cx+1] values
@@ -72,10 +83,14 @@
 .full_x_half_y:
     movi.n    a9,1          # load the shift register with 1 (for averaging)
     wsr.sar    a9           # put it in the SAR (shift amount register)
-    ee.vld.128.ip q0,a3,0   # preload first line
+    ee.ld.128.usar.ip q0,a3,16   # preload first line
+    ee.ld.128.usar.ip q1,a3,-16  # need to fix pointer alignment
+    ee.src.q q0,q0,q1       # now we have the correct source data
     add a3,a3,a5            # pS += iPitch
 .f_x_h_y_0:
-    ee.vld.128.ip q1,a3,0   # read 8 source values
+    ee.ld.128.usar.ip q1,a3,16  # read 8 source values
+    ee.ld.128.usar.ip q2,a3,-16
+    ee.src.q q1,q1,q2       # fix alignment
     ee.vld.128.ip q2,a4,0   # read 8 destination values
     ee.vadds.s16 q0,q1,q0   # sum s[cx]+s[cx+iPitch] values
     ee.vadds.s16 q0,q0,q5   # +1 for rounding up
@@ -95,29 +110,36 @@
     ee.vldbc.16.ip q4,a6,2  # get 2 to right shift 16-bit values with mul
     movi.n    a9,2          # load the shift register with 2 (for averaging)
     wsr.sar    a9           # put it in the SAR (shift amount register)
-    movi.n    a9,2          # shift bytes 2 (one short) for unaligned col+1
-    wur.sar_byte a9
-    addi.n a5,a5,-16        # adjust source pitch
-    ee.vld.128.ip q0,a3,16  # preload 8 source values
-    ee.vld.128.ip q1,a3,0   # read next 8 values to get col+1
-    ee.src.q q1,q0,q1       # now q1 has the col+1 values
-    ee.vadds.s16 q0,q0,q1   # sum horizontally
+    ee.ld.128.usar.ip q0,a3,16
+    ee.ld.128.usar.ip q1,a3,0  # prepare for col+1
+    addi.n a3,a3,-14
+    ee.src.q q0,q0,q1       # get 8 aligned source pixels at s[cx]
+    ee.ld.128.usar.ip q1,a3,16   # need to do it again in case we're at 0x0e
+    ee.ld.128.usar.ip q2,a3,0  # reset source pointer
+    addi.n a3,a3,-18
+    ee.src.q q1,q1,q2       # s[cx+1]
+    ee.vadds.s16 q0,q0,q1   # s[cx] + s[cx+1]
     add a3,a3,a5            # pS += iPitch
 .h_x_h_y_0:
-    ee.vld.128.ip q2,a3,16  # read 8 source values
-    ee.vld.128.ip q3,a3,0   # read next 8 values to get col+1
-    ee.src.q q3,q2,q3       # now q3 has the col+1 values
-    ee.vadds.s16 q2,q2,q3   # sum s[cx+iPitch] + s[cx+iPitch+1]
-    ee.vld.128.ip q3,a4,0   # read 8 destination values
-    ee.vadds.s16 q0,q2,q0   # sum top+bottom rows
+    ee.ld.128.usar.ip q1,a3,16
+    ee.ld.128.usar.ip q2,a3,0  # prepare for col+1
+    addi.n a3,a3,-14
+    ee.src.q q1,q1,q2       # get 8 aligned source pixels at s[cx]
+    ee.ld.128.usar.ip q2,a3,16   # need to do it again in case we're at 0x0e
+    ee.ld.128.usar.ip q3,a3,0   # reset source pointer
+    addi.n a3,a3,-18
+    ee.src.q q2,q2,q3       # s[cx+1]
+    ee.vadds.s16 q1,q1,q2   # s[cx] + s[cx+1]
+    ee.vld.128.ip q2,a4,0   # read 8 destination values
+    ee.vadds.s16 q0,q0,q1   # sum top+bottom rows
     ee.vadds.s16 q0,q0,q4   # +2 for rounding up
     ee.vmul.s16 q0,q0,q5    # multiply by "1" and then shift right by 2
-    ee.vadds.s16 q0,q0,q3   # add destination values
+    ee.vadds.s16 q0,q0,q2   # add destination values
     ee.vmin.s16 q0,q7,q0    # clamp to max of 2047
     ee.vmax.s16 q0,q6,q0    # clamp to min of -2048
     add a3,a3,a5            # pS += iPitch
     ee.vst.128.ip q0,a4,16  # store destination results
-    mv.qr q0,q2             # old becomes new
+    mv.qr q0,q1             # old becomes new
     addi.n a8,a8,-1         # decrement loop count
     bnez.n a8,.h_x_h_y_0
     retw.n                  # return
