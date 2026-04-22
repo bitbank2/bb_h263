@@ -22,7 +22,12 @@
 // bb_h263 is an H.263 video decoder/player contained in a single .H file
 // It is written in portable C code with a C++ class wrapper to simplify it's use
 // The project includes example code for use on Arduino and Linux
-// The decoder currently supports the original H.263 standard, but not the H.263+ (yet)
+// The decoder currently supports the original H.263 standard; not H.263+ (yet)
+// Since the original H.263 supported a limited selection of video resolutions
+// This library allows you to set a clip rectangle so that an unsupported resolution
+// can be encoded in a higher resolution (e.g. 320x240 encoded into a 352x288 video)
+// Macroblocks outside of the clip region are not calculated, so the are few
+// wasted cycles on non-visible areas
 //
 #ifndef __BB_H263__
 #define __BB_H263__
@@ -45,13 +50,13 @@
 
 #if (__ARM_ARCH >= 7) || defined(__arm64__) || defined(__aarch64__)
 #include <arm_neon.h>
-//#define HAS_NEON
+#define HAS_NEON
 #endif
 #if defined (ARDUINO_ARCH_ESP32) && !defined(NO_SIMD)
 #if __has_include ("dsps_fft2r_platform.h")
 #include "dsps_fft2r_platform.h"
 #if (dsps_fft2r_sc16_aes3_enabled == 1)
-//#define HAS_S3_SIMD
+#define HAS_S3_SIMD
 #define MALLOC_ALIGNED(x) heap_caps_aligned_alloc(16, x, MALLOC_CAP_SPIRAM);
 #ifdef __cplusplus
 extern "C" {
@@ -1603,7 +1608,7 @@ int iCol;
                pY += 64;
            }
         } // for each row
-#elif defined HAS_S3_SIMD
+#elif defined HAS_S3_SIMD_FUTURE
     pY = (int16_t *)&pMCU[MCU0];
     for (iRow=0; iRow<= iMaxRow; iRow++) {
         s3_ycbcr_convert_420(pY, pCb, pCr, ulDest, i16_Consts, pVideo->u8PixelType);
@@ -2118,9 +2123,12 @@ uint8_t *pTables;
 //         iMB = iGOB * iMBCount; // reset position to new GOB
          } // read GOB header
 get_mcbpc:
+       // For skipping macroblack calculations, we need to include an extra border MB because motion deltas
+       // can come from and go into these bordering blocks. +/-16 pixels outside of our clip rect needs to be
+       // calculated to not introduce errors on the border MBs within our clip region.
        if (pVideo->clipRect.w) { // a clipping rectangle is defined
            int tx = x << 4, ty = y << 4; // convert to pixels
-           bSkip = (tx < pVideo->clipRect.x || tx >= (pVideo->clipRect.x + pVideo->clipRect.w) || ty < pVideo->clipRect.y || ty >= (pVideo->clipRect.y + pVideo->clipRect.h));
+           bSkip = (tx < pVideo->clipRect.x-16 || tx >= (16 + pVideo->clipRect.x + pVideo->clipRect.w) || ty < pVideo->clipRect.y-16 || ty >= (16 + pVideo->clipRect.y + pVideo->clipRect.h));
        }
        if (ulPTYPE & 0x10) { // an INTER block has COD (coded macroblock indication)
          ulCode = (ulBits >> (31-iBit)) & 1; // 1 bit COD
@@ -2372,10 +2380,9 @@ uint8_t ucZig;
  ****************************************************************************/
 void H263MotComp(int x, int y, int32_t iMV_X, int32_t iMV_Y, int16_t *pMCUDest, H263STATE *pVideo, int bBackward)
 {
-int16_t s, *pS, *pD;
-int32_t i, dx, dy, cx, cy, iType;
-int32_t lx, ly, nx, ny, iWidth2;
-int bCheckBorders;
+int16_t *pS, *pD;
+int32_t i, dx, dy, cy, iType;
+int32_t lx, ly, iWidth2;
 int iFrameCX = pVideo->iFrameCX; // keep local copy to help compiler make better code
     
     if (y == 0 && x != 0) {
@@ -2390,13 +2397,6 @@ int iFrameCX = pVideo->iFrameCX; // keep local copy to help compiler make better
    dx = (iMV_X >> 1); // whole pel offsets
    dy = (iMV_Y >> 1);
 
-   // See if it overlaps any edge of the picture
-   if ((x<<4)+dx >= 0 && (y<<4)+dy >= 0 &&
-      (x<<4)+dx+15 < pVideo->iFrameCX && (y<<4)+dy+15 < pVideo->iFrameCY) { // we can do it faster if we don't have to test each pixel
-       bCheckBorders = 0;
-   } else {
-       bCheckBorders = 1;
-   }
    // do the luma blocks
    for (i=0; i<4; i++) {
       pD = &pMCUDest[i*DCTSIZE2];
@@ -2404,83 +2404,10 @@ int iFrameCX = pVideo->iFrameCX; // keep local copy to help compiler make better
          pS = pVideo->pFRef[0];
       else
          pS = pVideo->pBRef[0];
-      if (bCheckBorders) {
-         // Local x,y
-         lx = (x<<4)+((i&1)<<3) + dx;
-         ly = (y<<4)+((i&2)<<2) + dy;
-         switch (iType) {
-            case 0: // full pel in both dirs
-               for (cy=0; cy<8; cy++) {
-                  ny = ly + cy;
-                  if (ny < 0) ny = 0;
-                  if (ny >= pVideo->iFrameCY) ny = pVideo->iFrameCY-1;
-                  for (cx=0; cx<8; cx++) {
-                     nx = lx + cx;
-                     if (nx < 0) nx = 0;
-                     if (nx >= iFrameCX) nx = iFrameCX-1;
-                     pD[cx] += pS[ny*iFrameCX + nx];
-                     if (pD[cx] > MB_UPPER) pD[cx] = MB_UPPER;
-                     else if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
-                     }
-                  pD += 8;
-                  }
-               break;
-            case 1: // full pel Y, half-pel X
-               for (cy=0; cy<8; cy++) {
-                  ny = ly + cy;
-                  if (ny < 0) ny = 0;
-                  if (ny >= pVideo->iFrameCY) ny = pVideo->iFrameCY-1;
-                  for (cx=0; cx<8; cx++) {
-                     nx = lx + cx;
-                     if (nx < 0) nx = 0;
-                     if (nx >= iFrameCX) nx = iFrameCX-1;
-                     pD[cx] += ((pS[ny*iFrameCX + nx] + pS[ny*iFrameCX + nx + 1] + 1)>>1);  // avg left/right pixels
-                     if (pD[cx] > MB_UPPER) pD[cx] = MB_UPPER;
-                     else if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
-                     }
-                  pD += 8;
-                  }
-               break;
-            case 2: // half pel Y, full pel X
-               for (cy=0; cy<8; cy++) {
-                  ny = ly + cy;
-                  if (ny < 0) ny = 0;
-                  if (ny >= pVideo->iFrameCY) ny = pVideo->iFrameCY-1;
-                  for (cx=0; cx<8; cx++) {
-                     nx = lx + cx;
-                     if (nx < 0) nx = 0;
-                     if (nx >= iFrameCX) nx = iFrameCX-1;
-                     pD[cx] += ((pS[ny*iFrameCX + nx] + pS[(ny+1)*iFrameCX + nx] + 1)>>1);  // avg left/right pixels
-                     if (pD[cx] > MB_UPPER) pD[cx] = MB_UPPER;
-                     else if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
-                     }
-                  pD += 8;
-                  }
-               break;
-            case 3: // half pel Y, half pel X
-               for (cy=0; cy<8; cy++) {
-                  ny = ly + cy;
-                  if (ny < 0) ny = 0;
-                  if (ny >= pVideo->iFrameCY) ny = pVideo->iFrameCY-1;
-                  for (cx=0; cx<8; cx++) {
-                     nx = lx + cx;
-                     if (nx < 0) nx = 0;
-                     if (nx >= iFrameCX) nx = iFrameCX-1;
-                     s = pS[ny*iFrameCX + nx] + pS[ny*iFrameCX + nx + 1]; // top 2
-                     s += pS[(ny+1)*iFrameCX + nx] + pS[(ny+1)*iFrameCX + nx + 1]; // bottom 2
-                     pD[cx] += ((s + 2)>>2);  // avg the 4 pixel group
-                     if (pD[cx] > MB_UPPER) pD[cx] = MB_UPPER;
-                     else if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
-                     }
-                  pD += 8;
-                  }
-               break;
-            } // switch on MV type
-      } else {// don't check borders
          pS += (x*16)+ dx + ((i&1)<<3); // horiz address
          pS += ((y*16) + dy + ((i&2)<<2)) * iFrameCX;
 #ifdef HAS_S3_SIMD
-         s3_simd_mb(iType, pS, pD, iFrameCX*2, s3_mb_constants);
+         s3_simd_mb(iType, pS, pD, iFrameCX*2, s3_mb_constants); // luma blocks
 #else
          switch (iType) {
             case 0: // full pel in both dirs
@@ -2620,7 +2547,6 @@ int iFrameCX = pVideo->iFrameCX; // keep local copy to help compiler make better
                break;
             } // switch on MV type
 #endif // HAS_S3_SIMD
-         } // no border checks
       } // for each of the 4 Y blocks
 
    // determine the type of pixel capture
@@ -2634,13 +2560,6 @@ int iFrameCX = pVideo->iFrameCX; // keep local copy to help compiler make better
 
    // See if it overlaps any edge of the picture
    iWidth2 = (iFrameCX>>1);
-   if ((x<<3)+dx >= 0 && (y<<3)+dy >= 0 &&
-      (x<<3)+dx+7 < (iFrameCX>>1) && (y<<3)+dy+7 < (pVideo->iFrameCY>>1)) { // we can do it faster if we don't have to test each pixel
-      bCheckBorders = 0;
-   } else {
-       bCheckBorders = 1;
-   }
-
    // Local x,y
    lx = (x<<3) + dx;
    ly = (y<<3) + dy;
@@ -2650,80 +2569,10 @@ int iFrameCX = pVideo->iFrameCX; // keep local copy to help compiler make better
          pS = pVideo->pFRef[i+1];
       else
          pS = pVideo->pBRef[i+1];
-      if (bCheckBorders) {
-         switch (iType) {
-            case 0: // full pel x,y
-               for (cy=0; cy<8; cy++) {
-                  ny = ly + cy;
-                  if (ny < 0) ny = 0;
-                  if (ny >= (pVideo->iFrameCY>>1)) ny = (pVideo->iFrameCY>>1)-1;
-                  for (cx=0; cx<8; cx++) {
-                     nx = lx + cx;
-                     if (nx < 0) nx = 0;
-                     if (nx >= iWidth2) nx = iWidth2-1;
-                     pD[cx] += pS[ny*iWidth2 + nx];
-                     if (pD[cx] > MB_UPPER) pD[cx] = MB_UPPER;
-                     else if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
-                     }
-                  pD += 8;
-                  }
-               break;
-            case 1: // half pel x, full pel y
-               for (cy=0; cy<8; cy++) {
-                  ny = ly + cy;
-                  if (ny < 0) ny = 0;
-                  if (ny >= (pVideo->iFrameCY>>1)) ny = (pVideo->iFrameCY>>1)-1;
-                  for (cx=0; cx<8; cx++) {
-                     nx = lx + cx;
-                     if (nx < 0) nx = 0;
-                     if (nx >= iWidth2) nx = iWidth2-1;
-                     pD[cx] += ((pS[ny*iWidth2 + nx] + pS[ny*iWidth2 + nx + 1])>>1);
-                     if (pD[cx] > MB_UPPER) pD[cx] = MB_UPPER;
-                     else if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
-                     }
-                  pD += 8;
-                  }
-               break;
-            case 2: // full pel x, half pel y
-               for (cy=0; cy<8; cy++) {
-                  ny = ly + cy;
-                  if (ny < 0) ny = 0;
-                  if (ny >= (pVideo->iFrameCY>>1)) ny = (pVideo->iFrameCY>>1)-1;
-                  for (cx=0; cx<8; cx++) {
-                     nx = lx + cx;
-                     if (nx < 0) nx = 0;
-                     if (nx >= iWidth2) nx = iWidth2-1;
-                     pD[cx] += ((pS[ny*iWidth2 + nx] + pS[(ny+1)*iWidth2 + nx])>>1);
-                     if (pD[cx] > MB_UPPER) pD[cx] = MB_UPPER;
-                     else if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
-                     }
-                  pD += 8;
-                  }
-               break;
-            case 3: // half pel x,y
-               for (cy=0; cy<8; cy++) {
-                  ny = ly + cy;
-                  if (ny < 0) ny = 0;
-                  if (ny >= (pVideo->iFrameCY>>1)) ny = (pVideo->iFrameCY>>1)-1;
-                  for (cx=0; cx<8; cx++) {
-                     nx = lx + cx;
-                     if (nx < 0) nx = 0;
-                     if (nx >= iWidth2) nx = iWidth2-1;
-                     s = pS[ny*iWidth2 + nx] + pS[ny*iWidth2 + nx + 1]; // top 2
-                     s += pS[(ny+1)*iWidth2 + nx] + pS[(ny+1)*iWidth2 + nx + 1]; // bottom 2
-                     pD[cx] += ((s + 2)>>2);  // avg the 4 pixel group
-                     if (pD[cx] > MB_UPPER) pD[cx] = MB_UPPER;
-                     else if (pD[cx] < MB_LOWER) pD[cx] = MB_LOWER;
-                     }
-                  pD += 8;
-                  }
-               break;
-            } // switch on type
-         } else { // don't check borders
          pS += x*8 + dx; // horiz address
          pS += ((y*8) + dy) * iWidth2;
 #ifdef HAS_S3_SIMD
-        s3_simd_mb(iType, pS, pD, iFrameCX, s3_mb_constants);
+        s3_simd_mb(iType, pS, pD, iFrameCX, s3_mb_constants); // chroma blocks
 #else // S3_SIMD
          switch (iType) {
             case 0: // full pel x,y
@@ -2860,7 +2709,6 @@ int iFrameCX = pVideo->iFrameCX; // keep local copy to help compiler make better
                break;
             } // switch on type
 #endif // HAS_S3_SIMD
-         } // no border checks
       } // for i
 } /* H263MotComp() */
 
