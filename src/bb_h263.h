@@ -62,12 +62,12 @@
 extern "C" {
 #endif // cpp
 void s3_simd_mb(uint8_t u8Type, int16_t *pS, int16_t *pD, uint32_t iPitch, int16_t *pConstants);
-void s3_ycbcr_convert_420(uint16_t *pY, uint16_t *pCB, uint16_t *pCR, uint16_t *pOut, int16_t *pConsts, uint8_t ucPixelType);
+void s3_ycbcr_convert_420(int16_t *pY, int16_t *pCB, uint16_t *pOut, int iPitch, int16_t *pConsts, uint8_t ucPixelType);
 #ifdef __cplusplus
 }
 #endif // cpp
 int16_t s3_mb_constants[4] = {1, -2048, 2047, 2};
-int16_t i16_Consts[8] = {0x80, 113, 90, 22, 46, 1,32,2048};
+int16_t i16_Consts[16] = {0x80, 113, 90, 22, 46, 1, 16, 0x00ff, 1,32,2048, 16, 0x00ff, 1, 32, 2048};
 #endif // S3 SIMD
 #endif // __has_include
 #endif // ESP32
@@ -1308,7 +1308,7 @@ static void idctrow(int16_t *blk)
 {
   int x0, x1, x2, x3, x4, x5, x6, x7, x8;
 
-  /* shortcut */
+  /* shortcut for row of 0s */
   if (!((x1 = blk[4]<<11) | (x2 = blk[6]) | (x3 = blk[2]) |
         (x4 = blk[1]) | (x5 = blk[7]) | (x6 = blk[5]) | (x7 = blk[3])))
   {
@@ -1370,7 +1370,7 @@ static void idctcol(int16_t *blk)
   int x0, x1, x2, x3, x4, x5, x6, x7, x8;
   int t;
 
-  /* shortcut */
+  /* shortcut for column of 0s */
   if (!((x1 = (blk[8*4]<<8)) | (x2 = blk[8*6]) | (x3 = blk[8*2]) |
         (x4 = blk[8*1]) | (x5 = blk[8*7]) | (x6 = blk[8*5]) | (x7 = blk[8*3])))
   {
@@ -1412,49 +1412,49 @@ static void idctcol(int16_t *blk)
 
   /* fourth stage */
   t = (x7+x1)>>14;
-  if (t < -256) t = -256;
-  if (t > 255) t = 255;
+//  if (t < -256) t = -256;
+//  if (t > 255) t = 255;
   blk[8*0] = (int16_t)t;
   t = (x3+x2)>>14;
-  if (t < -256) t = -256;
-  if (t > 255) t = 255;
+//  if (t < -256) t = -256;
+//  if (t > 255) t = 255;
   blk[8*1] = (int16_t)t;
   t = (x0+x4)>>14;
-  if (t < -256) t = -256;
-  if (t > 255) t = 255;
+//  if (t < -256) t = -256;
+//  if (t > 255) t = 255;
   blk[8*2] = (int16_t)t;
   t = (x8+x6)>>14;
-  if (t < -256) t = -256;
-  if (t > 255) t = 255;
+//  if (t < -256) t = -256;
+//  if (t > 255) t = 255;
   blk[8*3] = (int16_t)t;
   t = (x8-x6)>>14;
-  if (t < -256) t = -256;
-  if (t > 255) t = 255;
+//  if (t < -256) t = -256;
+//  if (t > 255) t = 255;
   blk[8*4] = (int16_t)t;
   t = (x0-x4)>>14;
-  if (t < -256) t = -256;
-  if (t > 255) t = 255;
+//  if (t < -256) t = -256;
+//  if (t > 255) t = 255;
   blk[8*5] = (int16_t)t;
   t = (x3-x2)>>14;
-  if (t < -256) t = -256;
-  if (t > 255) t = 255;
+//  if (t < -256) t = -256;
+//  if (t > 255) t = 255;
   blk[8*6] = (int16_t)t;
   t = (x7-x1)>>14;
-  if (t < -256) t = -256;
-  if (t > 255) t = 255;
+//  if (t < -256) t = -256;
+//  if (t > 255) t = 255;
   blk[8*7] = (int16_t)t;
 }
 //
 // 2-dimensional inverse discrete cosine transform
 //
-void H263IDCT(int16_t *block, uint32_t ulMap)
+void H263IDCT(int16_t *block)
 {
 int i;
-
+    int16_t *s = block;
+    
     for (i=0; i<8; i++) {
-        if (ulMap & (1<<i)) { // skip empty rows
-            idctrow(block+8*i);
-        }
+        idctrow(s);
+        s += 8;
     }
     for (i=0; i<8; i++) {
         idctcol(block+i); //, ulMap);
@@ -1608,15 +1608,12 @@ int iCol;
                pY += 64;
            }
         } // for each row
-#elif defined HAS_S3_SIMD_FUTURE
+#elif defined HAS_S3_SIMD
     pY = (int16_t *)&pMCU[MCU0];
     for (iRow=0; iRow<= iMaxRow; iRow++) {
-        s3_ycbcr_convert_420(pY, pCb, pCr, ulDest, i16_Consts, pVideo->u8PixelType);
-        pY += 8;
-        ulDest += iPitch/4;
-        s3_ycbcr_convert_420(pY, pCb, pCr, ulDest, i16_Consts, pVideo->u8PixelType);
-        pCr += 8; pCb += 8; pY += 8; // next pair of rows
-        ulDest += iPitch/4;
+        s3_ycbcr_convert_420(pY, pCb, (uint16_t*)ulDest, iPitch, i16_Consts, pVideo->u8PixelType);
+        pCr += 8; pCb += 8; pY += 16; // next pair of rows
+        ulDest += iPitch/2;
         if (iRow == 3) { // halfway down, switch to next 2 MCUs
             pY += 64;
         }
@@ -2232,7 +2229,7 @@ get_mcbpc:
          iErr = GetH263MCU(pVLCTable, buf, &pMCU[i*DCTSIZE2], &iOff, &iBit, pVideo, cQuant, ucCBPY & cMask, ucMBType);
            if (!bSkip) {
                if (ucCBPY & cMask) {
-                   H263IDCT(&pMCU[i*DCTSIZE2], (uint32_t)-1);
+                   H263IDCT(&pMCU[i*DCTSIZE2]);
                } else if (ucMBType >= 3) { // only have a DC value, distribute it within the block
                    us = pMCU[i*DCTSIZE2 + 0] >> 3; // Get the adjusted DC value
                    for (j=0; j<64; j++)
@@ -2346,17 +2343,11 @@ uint8_t ucZig;
         }
          iIndex += iRun; // skip value
           ucZig = cZigZag2[iIndex++]; // get the zigzag index here to avoid a pipeline stall
-          if (iQuant & 1) { // odd value
-            if (iLevel < 0)
-               iLevel = (iQuant * (2 * iLevel - 1));
-            else
-               iLevel = (iQuant * (2 * iLevel + 1));
-          } else { // even value
-            if (iLevel < 0)
-               iLevel = (iQuant * (2 * iLevel - 1) + 1);
-            else
-               iLevel = (iQuant * (2 * iLevel + 1) - 1);
-            }
+          if (iLevel < 0) {
+              iLevel = (iQuant * (2 * iLevel - 1)) + (iQuant & 1);
+          } else {
+              iLevel = (iQuant * (2 * iLevel + 1)) - (iQuant & 1);
+          }
          pMCU[ucZig] = (int16_t)iLevel; // store the coeff
          }
       }
