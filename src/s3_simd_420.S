@@ -36,9 +36,9 @@
   ee.vldbc.16.ip  q3,a6,2   # get constant 1.77200 as 16-bits in all 128 bits of q3
   movi.n    a9,6           # load the shift register with 6
   wsr.sar    a9             # put it in the SAR (shift amount register)
-  ee.vmul.s16 q1,q1,q3   # (Cb *= 1.77200) >> 6
+  ee.vmul.s16 q5,q1,q3   # (Cb *= 1.77200) >> 6
   ee.vldbc.16.ip  q3,a6,2   # get constant 1.402 as 16-bits in all 128 bits of q3
-  ee.vmul.s16 q2,q2,q3   # (Cr *= 1.402) >> 6
+  ee.vmul.s16 q6,q2,q3   # (Cr *= 1.402) >> 6
   ee.vldbc.16.ip  q3,a6,2   # get constant 0.34414 as 16-bits in all 128 bits of q3
   movi.n    a9,0           # load the shift register with 0
   wsr.sar    a9             # put it in the SAR (shift amount register)
@@ -46,6 +46,8 @@
   ee.vldbc.16.ip  q3,a6,2   # get constant 0.71414 as 16-bits in all 128 bits of q3
   ee.vmul.s16 q3,q2,q3   # (Cr * 0.71414) >> 0
   ee.vadds.s16 q3,q3,q4  # (Cb * 0.34414) + (Cr * 0.71414)
+  mv.qr q1,q5
+  mv.qr q2,q6
   ee.vldbc.16.ip q4,a6,2   # get constant value of 1
   movi.n    a9,6           # load the shift register with 6
   wsr.sar    a9             # put it in the SAR (shift amount register)

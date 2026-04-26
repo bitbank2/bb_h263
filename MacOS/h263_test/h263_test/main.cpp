@@ -128,7 +128,7 @@ int iHeaderSize;
 } /* WriteBMP() */
 
 int main(int argc, const char * argv[]) {
-    int rc, w, h, iFrame;
+    int rc, w, h, iFrame=0;
     rc = h263.open("/Users/laurencebank/Downloads/matrix_h263.mov");
     //    rc = h263.open("/Users/laurencebank/Downloads/homer_car_h263.mov");
  //   rc = h263.open("/Users/laurencebank/Downloads/homer_h263_320x180.mov");
@@ -152,6 +152,6 @@ int main(int argc, const char * argv[]) {
         }
     }
     h263.close();
-    printf("finished\n");
+    printf("finished decoding %d frames\n", iFrame);
     return 0;
 }

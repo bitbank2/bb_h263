@@ -53,6 +53,7 @@
 #define HAS_NEON
 #endif
 #if defined (ARDUINO_ARCH_ESP32) && !defined(NO_SIMD)
+#pragma GCC optimize("O2")
 #if __has_include ("dsps_fft2r_platform.h")
 #include "dsps_fft2r_platform.h"
 #if (dsps_fft2r_sc16_aes3_enabled == 1)
@@ -1306,54 +1307,53 @@ uint32_t ulTCOEF[] = {0x000001,3,0x4, // 0 pos
 #define W7 565  /* 2048*sqrt(2)*cos(7*pi/16) */
 static void idctrow(int16_t *blk)
 {
-  int x0, x1, x2, x3, x4, x5, x6, x7, x8;
-
+int x0, x1, x2, x3, x4, x5, x6, x7, x8;
+    
   /* shortcut for row of 0s */
   if (!((x1 = blk[4]<<11) | (x2 = blk[6]) | (x3 = blk[2]) |
         (x4 = blk[1]) | (x5 = blk[7]) | (x6 = blk[5]) | (x7 = blk[3])))
   {
     blk[0]=blk[1]=blk[2]=blk[3]=blk[4]=blk[5]=blk[6]=blk[7]=blk[0]<<3;
-    return;
+  } else {
+      x0 = (blk[0]<<11) + 128; /* for proper rounding in the fourth stage */
+      
+      /* first stage */
+      x8 = W7*(x4+x5);
+      x4 = x8 + (W1-W7)*x4;
+      x5 = x8 - (W1+W7)*x5;
+      x8 = W3*(x6+x7);
+      x6 = x8 - (W3-W5)*x6;
+      x7 = x8 - (W3+W5)*x7;
+      
+      /* second stage */
+      x8 = x0 + x1;
+      x0 -= x1;
+      x1 = W6*(x3+x2);
+      x2 = x1 - (W2+W6)*x2;
+      x3 = x1 + (W2-W6)*x3;
+      x1 = x4 + x6;
+      x4 -= x6;
+      x6 = x5 + x7;
+      x5 -= x7;
+      
+      /* third stage */
+      x7 = x8 + x3;
+      x8 -= x3;
+      x3 = x0 + x2;
+      x0 -= x2;
+      x2 = (181*(x4+x5)+128)>>8;
+      x4 = (181*(x4-x5)+128)>>8;
+      
+      /* fourth stage */
+      blk[0] = (int16_t)((x7+x1)>>8);
+      blk[1] = (int16_t)((x3+x2)>>8);
+      blk[2] = (int16_t)((x0+x4)>>8);
+      blk[3] = (int16_t)((x8+x6)>>8);
+      blk[4] = (int16_t)((x8-x6)>>8);
+      blk[5] = (int16_t)((x0-x4)>>8);
+      blk[6] = (int16_t)((x3-x2)>>8);
+      blk[7] = (int16_t)((x7-x1)>>8);
   }
-
-  x0 = (blk[0]<<11) + 128; /* for proper rounding in the fourth stage */
-
-  /* first stage */
-  x8 = W7*(x4+x5);
-  x4 = x8 + (W1-W7)*x4;
-  x5 = x8 - (W1+W7)*x5;
-  x8 = W3*(x6+x7);
-  x6 = x8 - (W3-W5)*x6;
-  x7 = x8 - (W3+W5)*x7;
-
-  /* second stage */
-  x8 = x0 + x1;
-  x0 -= x1;
-  x1 = W6*(x3+x2);
-  x2 = x1 - (W2+W6)*x2;
-  x3 = x1 + (W2-W6)*x3;
-  x1 = x4 + x6;
-  x4 -= x6;
-  x6 = x5 + x7;
-  x5 -= x7;
-
-  /* third stage */
-  x7 = x8 + x3;
-  x8 -= x3;
-  x3 = x0 + x2;
-  x0 -= x2;
-  x2 = (181*(x4+x5)+128)>>8;
-  x4 = (181*(x4-x5)+128)>>8;
-
-  /* fourth stage */
-  blk[0] = (int16_t)((x7+x1)>>8);
-  blk[1] = (int16_t)((x3+x2)>>8);
-  blk[2] = (int16_t)((x0+x4)>>8);
-  blk[3] = (int16_t)((x8+x6)>>8);
-  blk[4] = (int16_t)((x8-x6)>>8);
-  blk[5] = (int16_t)((x0-x4)>>8);
-  blk[6] = (int16_t)((x3-x2)>>8);
-  blk[7] = (int16_t)((x7-x1)>>8);
 }
 
 /* column (vertical) IDCT
@@ -1374,75 +1374,58 @@ static void idctcol(int16_t *blk)
   if (!((x1 = (blk[8*4]<<8)) | (x2 = blk[8*6]) | (x3 = blk[8*2]) |
         (x4 = blk[8*1]) | (x5 = blk[8*7]) | (x6 = blk[8*5]) | (x7 = blk[8*3])))
   {
-    t = (blk[8*0]+32)>>6;
-    if (t < -256) t = -256;
-    if (t > 255) t = 255;
-    blk[8*0]=blk[8*1]=blk[8*2]=blk[8*3]=blk[8*4]=blk[8*5]=blk[8*6]=blk[8*7]=(int16_t)t;
-    return;
+      t = (blk[8*0]+32)>>6;
+      if (t < -256) t = -256;
+      if (t > 255) t = 255;
+      blk[8*0]=blk[8*1]=blk[8*2]=blk[8*3]=blk[8*4]=blk[8*5]=blk[8*6]=blk[8*7]=(int16_t)t;
+  } else {
+      x0 = (blk[8*0]<<8) + 8192;
+      
+      /* first stage */
+      x8 = W7*(x4+x5) + 4;
+      x4 = (x8+(W1-W7)*x4)>>3;
+      x5 = (x8-(W1+W7)*x5)>>3;
+      x8 = W3*(x6+x7) + 4;
+      x6 = (x8-(W3-W5)*x6)>>3;
+      x7 = (x8-(W3+W5)*x7)>>3;
+      
+      /* second stage */
+      x8 = x0 + x1;
+      x0 -= x1;
+      x1 = W6*(x3+x2) + 4;
+      x2 = (x1-(W2+W6)*x2)>>3;
+      x3 = (x1+(W2-W6)*x3)>>3;
+      x1 = x4 + x6;
+      x4 -= x6;
+      x6 = x5 + x7;
+      x5 -= x7;
+      
+      /* third stage */
+      x7 = x8 + x3;
+      x8 -= x3;
+      x3 = x0 + x2;
+      x0 -= x2;
+      x2 = (181*(x4+x5)+128)>>8;
+      x4 = (181*(x4-x5)+128)>>8;
+      
+      /* fourth stage */
+      t = (x7+x1)>>14;
+      blk[8*0] = (int16_t)t;
+      t = (x3+x2)>>14;
+      blk[8*1] = (int16_t)t;
+      t = (x0+x4)>>14;
+      blk[8*2] = (int16_t)t;
+      t = (x8+x6)>>14;
+      blk[8*3] = (int16_t)t;
+      t = (x8-x6)>>14;
+      blk[8*4] = (int16_t)t;
+      t = (x0-x4)>>14;
+      blk[8*5] = (int16_t)t;
+      t = (x3-x2)>>14;
+      blk[8*6] = (int16_t)t;
+      t = (x7-x1)>>14;
+      blk[8*7] = (int16_t)t;
   }
-
-  x0 = (blk[8*0]<<8) + 8192;
-
-  /* first stage */
-  x8 = W7*(x4+x5) + 4;
-  x4 = (x8+(W1-W7)*x4)>>3;
-  x5 = (x8-(W1+W7)*x5)>>3;
-  x8 = W3*(x6+x7) + 4;
-  x6 = (x8-(W3-W5)*x6)>>3;
-  x7 = (x8-(W3+W5)*x7)>>3;
-
-  /* second stage */
-  x8 = x0 + x1;
-  x0 -= x1;
-  x1 = W6*(x3+x2) + 4;
-  x2 = (x1-(W2+W6)*x2)>>3;
-  x3 = (x1+(W2-W6)*x3)>>3;
-  x1 = x4 + x6;
-  x4 -= x6;
-  x6 = x5 + x7;
-  x5 -= x7;
-
-  /* third stage */
-  x7 = x8 + x3;
-  x8 -= x3;
-  x3 = x0 + x2;
-  x0 -= x2;
-  x2 = (181*(x4+x5)+128)>>8;
-  x4 = (181*(x4-x5)+128)>>8;
-
-  /* fourth stage */
-  t = (x7+x1)>>14;
-//  if (t < -256) t = -256;
-//  if (t > 255) t = 255;
-  blk[8*0] = (int16_t)t;
-  t = (x3+x2)>>14;
-//  if (t < -256) t = -256;
-//  if (t > 255) t = 255;
-  blk[8*1] = (int16_t)t;
-  t = (x0+x4)>>14;
-//  if (t < -256) t = -256;
-//  if (t > 255) t = 255;
-  blk[8*2] = (int16_t)t;
-  t = (x8+x6)>>14;
-//  if (t < -256) t = -256;
-//  if (t > 255) t = 255;
-  blk[8*3] = (int16_t)t;
-  t = (x8-x6)>>14;
-//  if (t < -256) t = -256;
-//  if (t > 255) t = 255;
-  blk[8*4] = (int16_t)t;
-  t = (x0-x4)>>14;
-//  if (t < -256) t = -256;
-//  if (t > 255) t = 255;
-  blk[8*5] = (int16_t)t;
-  t = (x3-x2)>>14;
-//  if (t < -256) t = -256;
-//  if (t > 255) t = 255;
-  blk[8*6] = (int16_t)t;
-  t = (x7-x1)>>14;
-//  if (t < -256) t = -256;
-//  if (t > 255) t = 255;
-  blk[8*7] = (int16_t)t;
 }
 //
 // 2-dimensional inverse discrete cosine transform
@@ -2280,20 +2263,23 @@ h263z:
 int GetH263MCU(uint32_t *pTable, uint8_t *buf, int16_t *pMCU, int *iOffset, int *iBitnum, H263STATE *pVideo, int iQuant, int bTCOEF, uint8_t ucMBType)
 {
 int iBit = *iBitnum;
-int iOff = *iOffset;
+uint8_t *start_buf = buf;
 int iRun, iIndex, iErr;
 int32_t iLevel;
 uint32_t ulBits, ulCode, ulVal;
 int bLast;
 uint8_t ucZig;
+uint8_t *pZig;
+const uint8_t *pZigEnd = &cZigZag2[64];
     
+    buf += *iOffset; // fold 2 variables into 1 to speed up this function
     iErr = H263_SUCCESS;
-   ulBits = pVideo->ulBits;
+    ulBits = pVideo->ulBits;
     if (iBit >= 16) { // make sure we have enough bits to start
         iBit -= 16;
         ulBits <<= 16;
-        ulBits |= MOTOSHORT(&buf[iOff]);
-        iOff += 2;
+        ulBits |= MOTOSHORT(buf);
+        buf += 2;
     }
 
     if (ucMBType >= 3) { // INTRADC value only present in INTRA blocks
@@ -2310,13 +2296,15 @@ uint8_t ucZig;
     }
    bLast = 0;
    iIndex = (ucMBType >= 3); // for INTRA blocks, start at 1, for INTER, start at 0
+    pZig = (uint8_t *)&cZigZag2[iIndex];
+    
     if (bTCOEF) { // if coefficients coded for this block
-      while (!bLast && iIndex < 64) {
+      while (!bLast && pZig < pZigEnd) {
           if (iBit >= 16) {
               iBit -= 16;
               ulBits <<= 16;
-              ulBits |= MOTOSHORT(&buf[iOff]);
-              iOff += 2;
+              ulBits |= MOTOSHORT(buf);
+              buf += 2;
           }
           ulCode = (ulBits >> (18-iBit)) & 0x3ffe; // get 13-bits, shifted left by 1 to index shorts
           ulVal = pTable[ulCode]; // get the bit value
@@ -2328,8 +2316,8 @@ uint8_t ucZig;
               if (iBit >= 16) { // we need 15 bits
                   iBit -= 16;
                   ulBits <<= 16;
-                  ulBits |= MOTOSHORT(&buf[iOff]);
-                  iOff += 2;
+                  ulBits |= MOTOSHORT(buf);
+                  buf += 2;
                }
             ulCode = (ulBits >> (17-iBit)) & 0x7fff; // get 15 bits
             bLast = ulCode & 0x4000; // 1 bit for LAST
@@ -2341,8 +2329,8 @@ uint8_t ucZig;
             bLast = ulVal >> 16; // flag indicating last entry
             iLevel = (int32_t)(int8_t)(ulVal & 0xff); // get the level of this coefficient
         }
-         iIndex += iRun; // skip value
-          ucZig = cZigZag2[iIndex++]; // get the zigzag index here to avoid a pipeline stall
+         pZig += iRun; // skip value
+          ucZig = *pZig++; // get the zigzag index here to avoid a pipeline stall
           if (iLevel < 0) {
               iLevel = (iQuant * (2 * iLevel - 1)) + (iQuant & 1);
           } else {
@@ -2351,11 +2339,11 @@ uint8_t ucZig;
          pMCU[ucZig] = (int16_t)iLevel; // store the coeff
          }
       }
-    if (iIndex > 64) { // error
+    if (pZig > pZigEnd) { // error
         iErr = H263_DECODE_ERROR;
     }
    *iBitnum = iBit;
-   *iOffset = iOff;
+   *iOffset = (int)(buf - start_buf);
    pVideo->ulBits = ulBits;
    return iErr;
 } /* GetH263MCU() */
