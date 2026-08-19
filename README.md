@@ -1,5 +1,5 @@
 ## bb_h263
-A portable C library to play H.263 video files on constrained systems.<br>
+A portable C library (Linux, MacOS and Arduino) to play H.263 video files on constrained systems.<br>
 
 ### Why did you write it?
 Many projects would like to display video or animations on constrained devices. A typical solution is to use GIF or Motion-JPEG video. Both of these choices work reasonably with slow CPUs and small memories, but come at the expense of poorly compressed data. The large data size creates challenges in storing and transmitting these animations and videos. H.263 is no longer in widespread use because of newer, more efficient codecs like H.264. On constrained devices, H.263 is still a good fit to replace both GIF and MJPEG due to its small code size, computational simplicity and compact video data. H.263 is is still supported by FFMPEG, so it's easy to convert any video into a compatible file.<br>
