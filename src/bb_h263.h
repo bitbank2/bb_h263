@@ -127,8 +127,10 @@ enum {
     H263_NOT_SUPPORTED,
     H263_INVALID_PARAMETER,
     H263_INVALID_FILE,
-    H263_LAST_FRAME
+    H263_LAST_FRAME,
+    H263_NO_FRAMEBUFFER
 };
+
 // Audio codecs
 enum {
     H263_AUDIO_PCM_LE,
@@ -155,15 +157,6 @@ typedef struct H263_file_tag
   uint8_t *pData; // memory file pointer
   void * fHandle; // class pointer to File/SdFat or whatever you want
 } H263FILE;
-
-typedef struct H263_draw_tag
-{
-    int x, y; // upper left corner of this block
-    int iPitch; // bytes per row (not pixels)
-    int iWidth, iHeight; // size of this pixel block
-    uint16_t *pPixels; // 16-bit pixels
-    void *pUser;
-} H263DRAW;
 
 const uint8_t u8RangeTable[1024] = {
     0x00,0x01,0x02,0x03,0x04,0x05,0x06,0x07,0x08,0x09,0x0a,0x0b,0x0c,0x0d,0x0e,0x0f,
@@ -256,7 +249,6 @@ typedef struct tagvideo {
     H263_SEEK_CALLBACK *pfnSeek;
     H263_CLOSE_CALLBACK *pfnClose;
     H263FILE H263File;
-    void *pUser;
     int iFrameCX; // width in whole macroblocks (multiple of 16)
     int iFrameCY; // height in whole macroblocks (multiple of 16)
     int iStreamOff; // current offset in the file
@@ -387,7 +379,6 @@ class BB_H263
     int getFrameCount() {return _h263.iFrameTotal;}
     uint32_t getFrameDelay() {return _h263.iFrameDelay;}
     int getLastError() {return _h263.iLastError;}
-    void setUserPointer(void *p) { _h263.pUser = p;}
     void setPixelType(uint8_t u8Type) { _h263.u8PixelType = u8Type;} // defaults to little endian
     uint8_t getPixelType() {return _h263.u8PixelType;}
     
@@ -459,6 +450,10 @@ int BB_H263::openInternal(void)
     uint32_t u32Len, u32MaxLen, iDataSize = 0;
 
     iDataSize = _h263.H263File.iSize;
+    _h263.u8FileType = H263_FILE_INVALID;
+    _h263.pFramebuffer = nullptr;
+    _h263.iCurrentFrame = 0;
+    _h263.iFrameCX = 0;
     if (_h263.H263File.pData) {
         s = _h263.H263File.pData;
     } else {
@@ -664,6 +659,8 @@ int H263_decodeFrame(H263STATE *pH263, int xoff, int yoff)
     
     if (!pH263) return H263_INVALID_PARAMETER;
     if (pH263->iCurrentFrame >= pH263->iFrameTotal) return H263_INVALID_PARAMETER;
+    if (pH263->pFramebuffer == nullptr) return H263_NO_FRAMEBUFFER;
+    
     pH263->iXOffset = xoff;
     pH263->iYOffset = yoff;
     if (pH263->H263File.pData) { // reading directly from memory
@@ -1310,12 +1307,12 @@ static void idctrow(int16_t *blk)
 int x0, x1, x2, x3, x4, x5, x6, x7, x8;
     
   /* shortcut for row of 0s */
-  if (!((x1 = blk[4]<<11) | (x2 = blk[6]) | (x3 = blk[2]) |
+  if (!((x1 = blk[4]*2048) | (x2 = blk[6]) | (x3 = blk[2]) |
         (x4 = blk[1]) | (x5 = blk[7]) | (x6 = blk[5]) | (x7 = blk[3])))
   {
-    blk[0]=blk[1]=blk[2]=blk[3]=blk[4]=blk[5]=blk[6]=blk[7]=blk[0]<<3;
+    blk[0]=blk[1]=blk[2]=blk[3]=blk[4]=blk[5]=blk[6]=blk[7]=blk[0]*8;
   } else {
-      x0 = (blk[0]<<11) + 128; /* for proper rounding in the fourth stage */
+      x0 = (blk[0]*2048) + 128; /* for proper rounding in the fourth stage */
       
       /* first stage */
       x8 = W7*(x4+x5);
@@ -1371,7 +1368,7 @@ static void idctcol(int16_t *blk)
   int t;
 
   /* shortcut for column of 0s */
-  if (!((x1 = (blk[8*4]<<8)) | (x2 = blk[8*6]) | (x3 = blk[8*2]) |
+  if (!((x1 = (blk[8*4]*256)) | (x2 = blk[8*6]) | (x3 = blk[8*2]) |
         (x4 = blk[8*1]) | (x5 = blk[8*7]) | (x6 = blk[8*5]) | (x7 = blk[8*3])))
   {
       t = (blk[8*0]+32)>>6;
@@ -1379,7 +1376,7 @@ static void idctcol(int16_t *blk)
       if (t > 255) t = 255;
       blk[8*0]=blk[8*1]=blk[8*2]=blk[8*3]=blk[8*4]=blk[8*5]=blk[8*6]=blk[8*7]=(int16_t)t;
   } else {
-      x0 = (blk[8*0]<<8) + 8192;
+      x0 = (blk[8*0]*256) + 8192;
       
       /* first stage */
       x8 = W7*(x4+x5) + 4;
@@ -1871,7 +1868,7 @@ uint16_t *pMVTable, *pMCBPCTable;
 int *pClip;
 uint8_t *pTables;
 
-    if (pVideo->iCurrentFrame == 0 && pVideo->pACTables == NULL) {
+    if (pVideo->pACTables == NULL) {
         if (pVideo->iFramePitch <= 0) {
             pVideo->iFramePitch = pVideo->iWidth * 2; // set default pitch
         }
@@ -1949,8 +1946,8 @@ uint8_t *pTables;
         
         // create a fast lookup table for the motion vectors
         for (i=0; i<64; i++) {
-            signed char s;
-            s = ucMVDTab[i*3]; // code value
+            uint8_t s;
+            s = (uint8_t)ucMVDTab[i*3]; // code value
             iLen = ucMVDTab[i*3+1]; // code length
             ulBits = ucMVDTab[i*3+2]; // bit pattern
             if (iLen > 5 && ((ulBits >> (iLen-5)) & 0x1f) == 0) // "long" code has 5 leading zeros

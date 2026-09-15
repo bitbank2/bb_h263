@@ -14,6 +14,197 @@
 #include "../../../src/bb_h263.h"
 BB_H263 h263;
 
+/* Windows BMP header for RGB565 images */
+uint8_t winbmphdr_rgb565[138] =
+        {0x42,0x4d,0,0,0,0,0,0,0,0,0x8a,0,0,0,0x7c,0,
+         0,0,0,0,0,0,0,0,0,0,1,0,8,0,3,0,
+         0,0,0,0,0,0,0x13,0x0b,0,0,0x13,0x0b,0,0,0,0,
+         0,0,0,0,0,0,0,0xf8,0,0,0xe0,0x07,0,0,0x1f,0,
+         0,0,0,0,0,0,0x42,0x47,0x52,0x73,0,0,0,0,0,0,
+         0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+         0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+         0,0,0,0,0,0,0,0,0,0,2,0,0,0,0,0,
+         0,0,0,0,0,0,0,0,0,0};
+
+/* Windows BMP header for 8/24/32-bit images (54 bytes) */
+uint8_t winbmphdr[54] =
+        {0x42,0x4d,
+         0,0,0,0,         /* File size */
+         0,0,0,0,0x36,4,0,0,0x28,0,0,0,
+         0,0,0,0, /* Xsize */
+         0,0,0,0, /* Ysize */
+         1,0,8,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,       /* number of planes, bits per pel */
+         0,0,0,0};
+//
+// Read a Windows BMP file into memory
+// For this demo, the only supported files are 24 or 32-bits per pixel
+//
+uint8_t * ReadBMP(const char *fname, int *width, int *height, int *bpp, unsigned char *pPal)
+{
+    int y, w, h, bits, offset;
+    uint8_t *s, *d, *pTemp, *pBitmap;
+    int pitch, bytewidth;
+    int iSize, iDelta;
+    FILE *infile;
+    
+    infile = fopen(fname, "r+b");
+    if (infile == NULL) {
+        printf("Error opening input file %s\n", fname);
+        return NULL;
+    }
+    // Read the bitmap into RAM
+    fseek(infile, 0, SEEK_END);
+    iSize = (int)ftell(infile);
+    fseek(infile, 0, SEEK_SET);
+    pBitmap = (uint8_t *)malloc(iSize);
+    pTemp = (uint8_t *)malloc(iSize);
+    fread(pTemp, 1, iSize, infile);
+    fclose(infile);
+    
+    if (pTemp[0] != 'B' || pTemp[1] != 'M' || pTemp[14] < 0x28) {
+        free(pBitmap);
+        free(pTemp);
+        printf("Not a Windows BMP file!\n");
+        return NULL;
+    }
+    w = *(int32_t *)&pTemp[18];
+    h = *(int32_t *)&pTemp[22];
+    bits = *(int16_t *)&pTemp[26] * *(int16_t *)&pTemp[28];
+    if (bits <= 8) { // it has a palette, copy it
+        uint8_t *p = pPal;
+        for (int i=0; i<(1<<bits); i++)
+        {
+           *p++ = pTemp[54+i*4];
+           *p++ = pTemp[55+i*4];
+           *p++ = pTemp[56+i*4];
+        }
+    }
+    offset = *(int32_t *)&pTemp[10]; // offset to bits
+    bytewidth = (w * bits) >> 3;
+    pitch = (bytewidth + 3) & 0xfffc; // DWORD aligned
+// move up the pixels
+    d = pBitmap;
+    s = &pTemp[offset];
+    iDelta = pitch;
+    if (h > 0) {
+        iDelta = -pitch;
+        s = &pTemp[offset + (h-1) * pitch];
+    } else {
+        h = -h;
+    }
+    for (y=0; y<h; y++) {
+        if (bits == 32) {// need to swap red and blue
+            for (int i=0; i<bytewidth; i+=4) {
+                d[i] = s[i+2];
+                d[i+1] = s[i+1];
+                d[i+2] = s[i];
+                d[i+3] = s[i+3];
+            }
+        } else {
+            memcpy(d, s, bytewidth);
+        }
+        d += bytewidth;
+        s += iDelta;
+    }
+    *width = w;
+    *height = h;
+    *bpp = bits;
+    free(pTemp);
+    return pBitmap;
+    
+} /* ReadBMP() */
+
+//
+// Minimal code to save frames as Windows BMP files
+//
+void WriteBMP(char *fname, uint8_t *pBitmap, uint8_t *pPalette, int cx, int cy, int bpp)
+{
+FILE * oHandle;
+int i, bsize, lsize;
+uint32_t *l;
+uint8_t *s;
+uint8_t *ucTemp;
+uint8_t *pHdr;
+int iHeaderSize;
+
+    ucTemp = (uint8_t *)malloc(cx * 4);
+
+    if (bpp == 16) {
+        pHdr = winbmphdr_rgb565;
+        iHeaderSize = sizeof(winbmphdr_rgb565);
+    } else {
+        pHdr = winbmphdr;
+        iHeaderSize = sizeof(winbmphdr);
+    }
+    
+    oHandle = fopen(fname, "w+b");
+    bsize = (cx * bpp) >> 3;
+    lsize = (bsize + 3) & 0xfffc; /* Width of each line */
+    pHdr[26] = 1; // number of planes
+    pHdr[28] = (uint8_t)bpp;
+
+   /* Write the BMP header */
+   l = (uint32_t *)&pHdr[2];
+    i =(cy * lsize) + iHeaderSize;
+    if (bpp <= 8)
+        i += 1024;
+   *l = (uint32_t)i; /* Store the file size */
+   l = (uint32_t *)&pHdr[34]; // data size
+   i = (cy * lsize);
+   *l = (uint32_t)i; // store data size
+   l = (uint32_t *)&pHdr[18];
+   *l = (uint32_t)cx;      /* width */
+   *(l+1) = (uint32_t)cy;  /* height */
+    l = (uint32_t *)&pHdr[10]; // OFFBITS
+    if (bpp <= 8) {
+        *l = iHeaderSize + 1024;
+    } else { // no palette
+        *l = iHeaderSize;
+    }
+   fwrite(pHdr, 1, iHeaderSize, oHandle);
+    if (bpp <= 8) {
+    if (pPalette == NULL) {// create a grayscale palette
+        int iDelta, iCount = 1<<bpp;
+        int iGray = 0;
+        iDelta = 255/(iCount-1);
+        for (i=0; i<iCount; i++) {
+            ucTemp[i*4+0] = (uint8_t)iGray;
+            ucTemp[i*4+1] = (uint8_t)iGray;
+            ucTemp[i*4+2] = (uint8_t)iGray;
+            ucTemp[i*4+3] = 0;
+            iGray += iDelta;
+        }
+    } else {
+        for (i=0; i<256; i++) // change palette to WinBMP format
+        {
+            ucTemp[i*4 + 0] = pPalette[(i*3)+2];
+            ucTemp[i*4 + 1] = pPalette[(i*3)+1];
+            ucTemp[i*4 + 2] = pPalette[(i*3)+0];
+            ucTemp[i*4 + 3] = 0;
+        }
+    }
+    fwrite(ucTemp, 1, 1024, oHandle);
+    } // palette write
+   /* Write the image data */
+   for (i=cy-1; i>=0; i--)
+    {
+        s = &pBitmap[i*bsize];
+        if (bpp == 24) { // swap R/B for Windows BMP byte order
+            int j, iBpp = bpp/8;
+            uint8_t *d = ucTemp;
+            for (j=0; j<cx; j++) {
+                d[0] = s[2]; d[1] = s[1]; d[2] = s[0];
+                d += iBpp; s += iBpp;
+            }
+            fwrite(ucTemp, 1, (size_t)lsize, oHandle);
+        } else {
+            fwrite(s, 1, (size_t)lsize, oHandle);
+        }
+    }
+    free(ucTemp);
+    fclose(oHandle);
+} /* WriteBMP() */
+
 //
 // Return the current time in microseconds
 //
@@ -37,28 +228,115 @@ void H263LOG(int line, char *string, const char *result)
 } /* H263LOG() */
 
 int main(int argc, const char * argv[]) {
-    int i, rc, w, h, iTotal, iTime1, iTime2;
-    uint8_t *pFuzzData;
+    int i, rc, w, h, bpp, iTotal;
+    uint8_t *pCompare;
+//    int iTime1, iTime2;
+//    uint8_t *pFuzzData;
     char *szTestName;
-    int iTotalPass, iTotalFail;
-    uint8_t *pFrameBuffer, c1, c2;
-    uint32_t pal1;
-    uint16_t pal2;
+    int iFrames, iTotalPass, iTotalFail;
+//    uint8_t *pFrameBuffer, c1, c2;
     const char *szStart = " - START";
 
     iTotalPass = iTotalFail = iTotal = 0;
 
-    // Test 0 - Correct file read continuation
+    // Test 0 - Correct file open
     iTotal++;
-    szTestName = (char *)"Test Continuation";
+    szTestName = (char *)"File open, get info";
     H263LOG(__LINE__, szTestName, szStart);
     rc = h263.open("../../../sample_videos/matrix_h263.mov");
     if (rc == H263_SUCCESS) {
         w = h263.getWidth();
         h = h263.getHeight();
-	rc = h263.allocFramebuffer();
-	if (rc == H263_SUCCESS) {
-            if (h263.decodeFrame() == H263_SUCCESS) {
+        iFrames = h263.getFrameCount();
+     //   printf("w=%d, h=%d, f=%d\n", w, h, iFrames);
+        if (w == 352 && h == 288 && iFrames == 4351) {
+            iTotalPass++;
+            H263LOG(__LINE__, szTestName, " - PASSED");
+        } else {
+            iTotalFail++;
+            H263LOG(__LINE__, szTestName, " - FAILED");
+        }
+        h263.close();
+    } else {
+        H263LOG(__LINE__, szTestName, "Error opening movie file.");
+        iTotalFail++;
+        H263LOG(__LINE__, szTestName, " - FAILED");
+    }
+
+    // Test 1 - Invalid file
+    iTotal++;
+    szTestName = (char *)"Invalid file";
+    H263LOG(__LINE__, szTestName, szStart);
+    rc = h263.open("../../../src/bb_h263.h");
+    if (rc == H263_INVALID_FILE) {
+        iTotalPass++;
+        H263LOG(__LINE__, szTestName, " - PASSED");
+    } else {
+        iTotalFail++;
+        printf("rc=%d\n", rc);
+        H263LOG(__LINE__, szTestName, " - FAILED");
+    }
+    // Test 2 - Verify error when asked to decode a frame with no buffer
+    szTestName = (char *)"Missing framebuffer";
+    iTotal++;
+    H263LOG(__LINE__, szTestName, szStart);
+    rc = h263.open("../../../sample_videos/matrix_h263.mov");
+    if (rc == H263_SUCCESS) {
+        rc = h263.decodeFrame();
+        if (rc == H263_NO_FRAMEBUFFER) {
+            iTotalPass++;
+            H263LOG(__LINE__, szTestName, " - PASSED");
+        } else {
+            iTotalFail++;
+            H263LOG(__LINE__, szTestName, " - FAILED");
+        }
+        h263.close();
+    } else {
+        H263LOG(__LINE__, szTestName, "Error opening movie file.");
+        iTotalFail++;
+        H263LOG(__LINE__, szTestName, " - FAILED");
+    }
+    // Test 3 - frame counter advance
+    szTestName = (char *)"Frame counter advance";
+    iTotal++;
+    H263LOG(__LINE__, szTestName, szStart);
+    rc = h263.open("../../../sample_videos/matrix_h263.mov");
+    if (rc == H263_SUCCESS) {
+        rc = h263.allocFramebuffer();
+        for (i=0; i<10 && rc == H263_SUCCESS; i++) {
+            rc = h263.decodeFrame();
+        } // for i
+        if (rc == H263_SUCCESS && i == h263.getCurrentFrame()) {
+            iTotalPass++;
+            H263LOG(__LINE__, szTestName, " - PASSED");
+        } else {
+            printf("frame count = %d\n", h263.getCurrentFrame());
+            iTotalFail++;
+            H263LOG(__LINE__, szTestName, " - FAILED");
+        }
+        h263.freeFramebuffer();
+        h263.close();
+    } else {
+        H263LOG(__LINE__, szTestName, "Error opening movie file.");
+        iTotalFail++;
+        H263LOG(__LINE__, szTestName, " - FAILED");
+    }
+    // Test 4 - Verify correct decoding
+    szTestName = (char *)"Verify correct decoding";
+    iTotal++;
+    H263LOG(__LINE__, szTestName, szStart);
+    rc = h263.open("../../../sample_videos/matrix_h263.mov");
+    if (rc == H263_SUCCESS) {
+        h263.setPixelType(H263_PIXEL_RGB565_LE);
+        rc = h263.allocFramebuffer();
+        for (i=0; i<15 && rc == H263_SUCCESS; i++) {
+            rc = h263.decodeFrame();
+        } // for i
+        if (rc == H263_SUCCESS) {
+//            WriteBMP("./frame_compare.bmp", h263.getFramebuffer(), NULL, h263.getWidth(), h263.getHeight(), 16);
+            pCompare = ReadBMP("./frame_compare.bmp", &w, &h, &bpp, NULL);
+            // Compare correct output to the current frame
+            if (pCompare && memcmp(pCompare, h263.getFramebuffer(), h * w * 2) == 0) {
                 iTotalPass++;
                 H263LOG(__LINE__, szTestName, " - PASSED");
             } else {
@@ -66,87 +344,21 @@ int main(int argc, const char * argv[]) {
                 H263LOG(__LINE__, szTestName, " - FAILED");
             }
         } else {
-            H263LOG(__LINE__, szTestName, "Error allocating framebuffer");
             iTotalFail++;
             H263LOG(__LINE__, szTestName, " - FAILED");
         }
-	h263.close();
-	h263.freeFramebuffer();
+        h263.freeFramebuffer();
+        h263.close();
     } else {
         H263LOG(__LINE__, szTestName, "Error opening movie file.");
         iTotalFail++;
         H263LOG(__LINE__, szTestName, " - FAILED");
     }
-
 #ifdef FUTURE
-    // Test 1 - Test User pointer";
-    iTotal++;
-    szTestName = (char *)"Test User pointer";
-    PNGLOG(__LINE__, szTestName, szStart);
-    rc = png.openFLASH((uint8_t *)octocat_8bpp, sizeof(octocat_8bpp), PNGDraw);
-    if (rc == PNG_SUCCESS) {
-        w = png.getWidth();
-        h = png.getHeight();
-        priv.xoff = w/2; // arbitrary values to see if they get passed properly
-        priv.yoff = h/2;
-        xoff = yoff = 0;
-        rc = png.decode(&priv, 0);
-        if (xoff == priv.xoff && yoff == priv.yoff) {
-            iTotalPass++;
-            PNGLOG(__LINE__, szTestName, " - PASSED");
-        } else {
-            iTotalFail++;
-            PNGLOG(__LINE__, szTestName, " - FAILED");
-        }
-    } else {
-        PNGLOG(__LINE__, szTestName, "Error opening PNG file.");
-    }
-    // Test 2 - Verify bad parameters return an error
-    szTestName = (char *)"PNG bad parameter test 1";
-    iTotal++;
-    PNGLOG(__LINE__, szTestName, szStart);
-    png.openFLASH((uint8_t *)octocat_8bpp, sizeof(octocat_8bpp), NULL);
-    // no PNGDraw callback and no framebuffer = invalid
-    png.decode(NULL, 0);
-    if (png.getLastError() == PNG_NO_BUFFER) {
-        iTotalPass++;
-        PNGLOG(__LINE__, szTestName, " - PASSED");
-    } else {
-        iTotalFail++;
-        PNGLOG(__LINE__, szTestName, " - FAILED");
-    }
-    // Test 3 - Verify pixel format
-    szTestName = (char *)"PNG verify pixel format";
-    iTotal++;
-    PNGLOG(__LINE__, szTestName, szStart);
-    png.openFLASH((uint8_t *)octocat_8bpp, sizeof(octocat_8bpp), PNGDraw);
-    iBpp = 0;
-    png.decode(NULL, 0);
-    if (iBpp == 8) { // should be 8 bits per pixel
-        iTotalPass++;
-        PNGLOG(__LINE__, szTestName, " - PASSED");
-    } else {
-        iTotalFail++;
-        PNGLOG(__LINE__, szTestName, " - FAILED");
-    }
-    // Test 4 - Verify correct dimensions
-    szTestName = (char *)"PNG verify correct dimensions";
-    iTotal++;
-    PNGLOG(__LINE__, szTestName, szStart);
-    png.openFLASH((uint8_t *)octocat_8bpp, sizeof(octocat_8bpp), PNGDraw);
-    iWidth = iLines = 0;
-    png.decode(NULL, 0);
-    if (iWidth == 120 && iLines == 100) { // should be 4 bits per pixel
-        iTotalPass++;
-        PNGLOG(__LINE__, szTestName, " - PASSED");
-    } else {
-        iTotalFail++;
-        PNGLOG(__LINE__, szTestName, " - FAILED");
-    }
     // Test 5 - Check CRC option
     szTestName = (char *)"PNG Check CRC timing";
     iTotal++;
-    PNGLOG(__LINE__, szTestName, szStart);
+    H263LOG(__LINE__, szTestName, szStart);
     png.openFLASH((uint8_t *)octocat_8bpp, sizeof(octocat_8bpp), PNGDraw);
     iTime1 = Micros();
     png.decode(NULL, 0); // without CRC check should be faster
@@ -159,15 +371,15 @@ int main(int argc, const char * argv[]) {
     png.close();
     if (iTime1 < iTime2) { // skipping CRC check should be faster
         iTotalPass++;
-        PNGLOG(__LINE__, szTestName, " - PASSED");
+        H263LOG(__LINE__, szTestName, " - PASSED");
     } else {
         iTotalFail++;
-        PNGLOG(__LINE__, szTestName, " - FAILED");
+        H263LOG(__LINE__, szTestName, " - FAILED");
     }
     // Test 6 - Check palette options
     szTestName = (char *)"PNG Check palette options";
     iTotal++;
-    PNGLOG(__LINE__, szTestName, szStart);
+    H263LOG(__LINE__, szTestName, szStart);
     png.openFLASH((uint8_t *)octocat_8bpp, sizeof(octocat_8bpp), PNGDraw);
     png.decode(NULL, 0); // default palette has 24-bit entries
     pal1 = palentry24;
@@ -178,15 +390,15 @@ int main(int argc, const char * argv[]) {
     png.close();
     if (pal1 == 0x2c2c2a && pal2 == 0x2965) { // correct 24-bit and 16-bit palette values
         iTotalPass++;
-        PNGLOG(__LINE__, szTestName, " - PASSED");
+        H263LOG(__LINE__, szTestName, " - PASSED");
     } else {
         iTotalFail++;
-        PNGLOG(__LINE__, szTestName, " - FAILED");
+        H263LOG(__LINE__, szTestName, " - FAILED");
     }
     // Test 7 - Check full framebuffer decode
     szTestName = (char *)"PNG Check full framebuffer decode";
     iTotal++;
-    PNGLOG(__LINE__, szTestName, szStart);
+    H263LOG(__LINE__, szTestName, szStart);
     png.openFLASH((uint8_t *)octocat_8bpp, sizeof(octocat_8bpp), NULL);
     pFrameBuffer = (uint8_t *)malloc(png.getWidth() * png.getHeight()); // just big enough for 8-bpp pixels
     png.setBuffer(pFrameBuffer);
@@ -196,10 +408,10 @@ int main(int argc, const char * argv[]) {
     c2 = pFrameBuffer[40 + (40 * 120)]; // pixel at (40,40)
     if ( c1 == 2 &&  c2 == 15) { // check a pixel from first line and 50th line for correct colors
         iTotalPass++;
-        PNGLOG(__LINE__, szTestName, " - PASSED");
+        H263LOG(__LINE__, szTestName, " - PASSED");
     } else {
         iTotalFail++;
-        PNGLOG(__LINE__, szTestName, " - FAILED");
+        H263LOG(__LINE__, szTestName, " - FAILED");
     }
     free(pFrameBuffer);
     // Test 8 - check 8-bit to RGB565 conversion and alpha blending
@@ -207,7 +419,7 @@ int main(int argc, const char * argv[]) {
     u32BG = 0x00ff00; // set background color to pure green
     szTestName = (char *)"PNG Verify 8-bit to RGB565 output";
     iTotal++;
-    PNGLOG(__LINE__, szTestName, szStart);
+    H263LOG(__LINE__, szTestName, szStart);
     u16Out = 0xffff;
     png.openFLASH((uint8_t *)octocat_8bpp, sizeof(octocat_8bpp), PNGDraw2);
     png.setBuffer(NULL);
@@ -215,17 +427,17 @@ int main(int argc, const char * argv[]) {
     png.close();
     if (u16Out == 0xe007) { // check transparnet pixel (0,0) to see if it matches the 32-bit BG color we asked for
         iTotalPass++;
-        PNGLOG(__LINE__, szTestName, " - PASSED");
+        H263LOG(__LINE__, szTestName, " - PASSED");
     } else {
         iTotalFail++;
-        PNGLOG(__LINE__, szTestName, " - FAILED");
+        H263LOG(__LINE__, szTestName, " - FAILED");
     }
     // Test 9 - check 32-bit to RGB565 conversion and alpha blending
     ucPixelType = PNG_RGB565_BIG_ENDIAN;
     u32BG = 0xff0000; // set background color to pure blue
     szTestName = (char *)"PNG Verify 32-bit to RGB565 output";
     iTotal++;
-    PNGLOG(__LINE__, szTestName, szStart);
+    H263LOG(__LINE__, szTestName, szStart);
     u16Out = 0xffff;
     png.openFLASH((uint8_t *)octocat_8bpp, sizeof(octocat_8bpp), PNGDraw2);
     png.setBuffer(NULL);
@@ -233,16 +445,16 @@ int main(int argc, const char * argv[]) {
     png.close();
     if (u16Out == 0x1f00) { // check transparnet pixel (0,0) to see if it matches the 32-bit BG color we asked for
         iTotalPass++;
-        PNGLOG(__LINE__, szTestName, " - PASSED");
+        H263LOG(__LINE__, szTestName, " - PASSED");
     } else {
         iTotalFail++;
-        PNGLOG(__LINE__, szTestName, " - FAILED");
+        H263LOG(__LINE__, szTestName, " - FAILED");
     }
     // Test 10 - check the decoding can be aborted when the PNGDraw callback returns 0
     ucPixelType = PNG_RGB565_BIG_ENDIAN;
     szTestName = (char *)"PNG decode aborted early";
     iTotal++;
-    PNGLOG(__LINE__, szTestName, szStart);
+    H263LOG(__LINE__, szTestName, szStart);
     u16Out = 0xffff;
     png.openFLASH((uint8_t *)octocat_8bpp, sizeof(octocat_8bpp), PNGDraw3);
     png.setBuffer(NULL);
@@ -250,10 +462,10 @@ int main(int argc, const char * argv[]) {
     png.close();
     if (rc == PNG_QUIT_EARLY) { // check transparnet pixel (0,0) to see if it matches the 32-bit BG color we asked for
         iTotalPass++;
-        PNGLOG(__LINE__, szTestName, " - PASSED");
+        H263LOG(__LINE__, szTestName, " - PASSED");
     } else {
         iTotalFail++;
-        PNGLOG(__LINE__, szTestName, " - FAILED");
+        H263LOG(__LINE__, szTestName, " - FAILED");
     }
 
     // FUZZ testing
@@ -263,7 +475,7 @@ int main(int argc, const char * argv[]) {
     szTestName = (char *)"Single Byte Sequential Corruption Test";
     iTotal++;
     pFuzzData = (uint8_t *)malloc(sizeof(octocat_8bpp));
-    PNGLOG(__LINE__, szTestName, szStart);
+    H263LOG(__LINE__, szTestName, szStart);
     // We don't need to corrupt the file all the way to the end because it will take a loooong time
     // The header is the main area where corruption can cause erratic behavior
     for (i=0; i<sizeof(octocat_8bpp); i++) { // corrupt each byte one at a time by inverting it
@@ -273,13 +485,13 @@ int main(int argc, const char * argv[]) {
             png.decode(NULL, 0);
         }
     } // for each test
-    PNGLOG(__LINE__, szTestName, " - PASSED");
+    H263LOG(__LINE__, szTestName, " - PASSED");
     iTotalPass++;
     
     // Fuzz test part 2 - multi-byte random corruption
     szTestName = (char *)"Multi-Byte Random Corruption Test";
     iTotal++;
-    PNGLOG(__LINE__, szTestName, szStart);
+    H263LOG(__LINE__, szTestName, szStart);
     for (i=0; i<1000; i++) { // 1000 iterations of random spots in the file to corrupt with random values
         int iOffset;
         memcpy(pFuzzData, octocat_8bpp, sizeof(octocat_8bpp)); // start with the valid data
@@ -291,7 +503,7 @@ int main(int argc, const char * argv[]) {
             png.decode(NULL, 0);
         }
     } // for each test
-    PNGLOG(__LINE__, szTestName, " - PASSED");
+    H263LOG(__LINE__, szTestName, " - PASSED");
     iTotalPass++;
     
     free(pFuzzData);
