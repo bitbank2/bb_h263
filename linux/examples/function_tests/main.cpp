@@ -354,120 +354,100 @@ int main(int argc, const char * argv[]) {
         iTotalFail++;
         H263LOG(__LINE__, szTestName, " - FAILED");
     }
+    // Test 5 - Check clipping rectangle out of bounds
+    szTestName = (char *)"Check clipping rectangle out of bounds";
+    iTotal++;
+    H263LOG(__LINE__, szTestName, szStart);
+    rc = h263.open("../../../sample_videos/matrix_h263.mov");
+    if (rc == H263_SUCCESS) {
+        BB_RECT bbr;
+        bbr.x = bbr.y = 0;
+        bbr.w = h263.getWidth() * 2; // beyond right edge
+        bbr.h = h263.getHeight();
+        rc = h263.setClipRect(&bbr);
+        if (rc == H263_INVALID_PARAMETER) {
+            iTotalPass++;
+            H263LOG(__LINE__, szTestName, " - PASSED");
+        } else {
+            iTotalFail++;
+            H263LOG(__LINE__, szTestName, " - FAILED");
+        }
+        h263.close();
+    } else {
+        H263LOG(__LINE__, szTestName, "Error opening movie file.");
+        iTotalFail++;
+        H263LOG(__LINE__, szTestName, " - FAILED");
+    }
+    // Test 6 - Check clipping rectangle snaps to macroblocks
+    szTestName = (char *)"Check clipping rectangle snaps to macroblocks";
+    iTotal++;
+    H263LOG(__LINE__, szTestName, szStart);
+    rc = h263.open("../../../sample_videos/matrix_h263.mov");
+    if (rc == H263_SUCCESS) {
+        BB_RECT bbr;
+        bbr.x = bbr.y = 3;
+        bbr.w = h263.getWidth() - 21;
+        bbr.h = h263.getHeight() - 4;
+        rc = h263.setClipRect(&bbr);
+        if (rc == H263_SUCCESS) {
+            h263.getClipRect(&bbr);
+            //printf("x:%d y:%d w:%d h:%d\n", bbr.x, bbr.y, bbr.w, bbr.h);
+            if (bbr.x == 0 && bbr.y == 0 && bbr.h == h263.getHeight() && bbr.w == h263.getWidth() - 16) {
+                iTotalPass++;
+                H263LOG(__LINE__, szTestName, " - PASSED");
+            } else {
+                iTotalFail++;
+                H263LOG(__LINE__, szTestName, " - FAILED");
+            }
+        } else {
+            iTotalFail++;
+            H263LOG(__LINE__, szTestName, " - FAILED");
+        }
+        h263.close();
+    } else {
+        H263LOG(__LINE__, szTestName, "Error opening movie file.");
+        iTotalFail++;
+        H263LOG(__LINE__, szTestName, " - FAILED");
+    }
+    // Test 7 - Detect AVI video file type
+    iTotal++;
+    szTestName = (char *)"Detect AVI video file type";
+    H263LOG(__LINE__, szTestName, szStart);
+    rc = h263.open("../../../sample_videos/homer_car_h263.avi");
+    if (rc == H263_SUCCESS && h263.getFiletype() == H263_FILE_AVI) {
+        iTotalPass++;
+        H263LOG(__LINE__, szTestName, " - PASSED");
+    } else {
+        iTotalFail++;
+        H263LOG(__LINE__, szTestName, " - FAILED");
+    }
+    h263.close();
+    // Test 8 - Decoding past end of file
+    iTotal++;
+    szTestName = (char *)"Decoding past end of file";
+    H263LOG(__LINE__, szTestName, szStart);
+    rc = h263.open("../../../sample_videos/homer_car_h263.avi");
+    if (rc == H263_SUCCESS) {
+        rc = h263.allocFramebuffer();
+        printf("count = %d\n", h263.getFrameCount());
+        for (i=0; i<h263.getFrameCount() && rc == H263_SUCCESS; i++) {
+            rc = h263.decodeFrame();
+        }
+        printf("i=%d\n", i);
+        if (rc == H263_SUCCESS && h263.decodeFrame() == H263_VIDEO_ENDED) {
+            iTotalPass++;
+            H263LOG(__LINE__, szTestName, " - PASSED");
+        } else {
+            iTotalFail++;
+            H263LOG(__LINE__, szTestName, " - FAILED");
+        }
+    } else {
+        H263LOG(__LINE__, szTestName, "Error opening movie file.");
+        iTotalFail++;
+        H263LOG(__LINE__, szTestName, " - FAILED");
+    }
+    h263.close();
 #ifdef FUTURE
-    // Test 5 - Check CRC option
-    szTestName = (char *)"PNG Check CRC timing";
-    iTotal++;
-    H263LOG(__LINE__, szTestName, szStart);
-    png.openFLASH((uint8_t *)octocat_8bpp, sizeof(octocat_8bpp), PNGDraw);
-    iTime1 = Micros();
-    png.decode(NULL, 0); // without CRC check should be faster
-    iTime1 = Micros() - iTime1;
-    png.close();
-    png.openFLASH((uint8_t *)octocat_8bpp, sizeof(octocat_8bpp), PNGDraw);
-    iTime2 = Micros();
-    png.decode(NULL, PNG_CHECK_CRC); // with CRC check should be slower
-    iTime2 = Micros() - iTime2;
-    png.close();
-    if (iTime1 < iTime2) { // skipping CRC check should be faster
-        iTotalPass++;
-        H263LOG(__LINE__, szTestName, " - PASSED");
-    } else {
-        iTotalFail++;
-        H263LOG(__LINE__, szTestName, " - FAILED");
-    }
-    // Test 6 - Check palette options
-    szTestName = (char *)"PNG Check palette options";
-    iTotal++;
-    H263LOG(__LINE__, szTestName, szStart);
-    png.openFLASH((uint8_t *)octocat_8bpp, sizeof(octocat_8bpp), PNGDraw);
-    png.decode(NULL, 0); // default palette has 24-bit entries
-    pal1 = palentry24;
-    png.close();
-    png.openFLASH((uint8_t *)octocat_8bpp, sizeof(octocat_8bpp), PNGDraw);
-    png.decode(NULL, PNG_FAST_PALETTE); // Fast palette is RGB565 little-endian
-    pal2 = palentry16;
-    png.close();
-    if (pal1 == 0x2c2c2a && pal2 == 0x2965) { // correct 24-bit and 16-bit palette values
-        iTotalPass++;
-        H263LOG(__LINE__, szTestName, " - PASSED");
-    } else {
-        iTotalFail++;
-        H263LOG(__LINE__, szTestName, " - FAILED");
-    }
-    // Test 7 - Check full framebuffer decode
-    szTestName = (char *)"PNG Check full framebuffer decode";
-    iTotal++;
-    H263LOG(__LINE__, szTestName, szStart);
-    png.openFLASH((uint8_t *)octocat_8bpp, sizeof(octocat_8bpp), NULL);
-    pFrameBuffer = (uint8_t *)malloc(png.getWidth() * png.getHeight()); // just big enough for 8-bpp pixels
-    png.setBuffer(pFrameBuffer);
-    png.decode(NULL, 0);
-    png.close();
-    c1 = pFrameBuffer[60 + (10 * 120)]; // pixel at (60,10)
-    c2 = pFrameBuffer[40 + (40 * 120)]; // pixel at (40,40)
-    if ( c1 == 2 &&  c2 == 15) { // check a pixel from first line and 50th line for correct colors
-        iTotalPass++;
-        H263LOG(__LINE__, szTestName, " - PASSED");
-    } else {
-        iTotalFail++;
-        H263LOG(__LINE__, szTestName, " - FAILED");
-    }
-    free(pFrameBuffer);
-    // Test 8 - check 8-bit to RGB565 conversion and alpha blending
-    ucPixelType = PNG_RGB565_BIG_ENDIAN;
-    u32BG = 0x00ff00; // set background color to pure green
-    szTestName = (char *)"PNG Verify 8-bit to RGB565 output";
-    iTotal++;
-    H263LOG(__LINE__, szTestName, szStart);
-    u16Out = 0xffff;
-    png.openFLASH((uint8_t *)octocat_8bpp, sizeof(octocat_8bpp), PNGDraw2);
-    png.setBuffer(NULL);
-    png.decode(NULL, 0);
-    png.close();
-    if (u16Out == 0xe007) { // check transparnet pixel (0,0) to see if it matches the 32-bit BG color we asked for
-        iTotalPass++;
-        H263LOG(__LINE__, szTestName, " - PASSED");
-    } else {
-        iTotalFail++;
-        H263LOG(__LINE__, szTestName, " - FAILED");
-    }
-    // Test 9 - check 32-bit to RGB565 conversion and alpha blending
-    ucPixelType = PNG_RGB565_BIG_ENDIAN;
-    u32BG = 0xff0000; // set background color to pure blue
-    szTestName = (char *)"PNG Verify 32-bit to RGB565 output";
-    iTotal++;
-    H263LOG(__LINE__, szTestName, szStart);
-    u16Out = 0xffff;
-    png.openFLASH((uint8_t *)octocat_8bpp, sizeof(octocat_8bpp), PNGDraw2);
-    png.setBuffer(NULL);
-    png.decode(NULL, 0);
-    png.close();
-    if (u16Out == 0x1f00) { // check transparnet pixel (0,0) to see if it matches the 32-bit BG color we asked for
-        iTotalPass++;
-        H263LOG(__LINE__, szTestName, " - PASSED");
-    } else {
-        iTotalFail++;
-        H263LOG(__LINE__, szTestName, " - FAILED");
-    }
-    // Test 10 - check the decoding can be aborted when the PNGDraw callback returns 0
-    ucPixelType = PNG_RGB565_BIG_ENDIAN;
-    szTestName = (char *)"PNG decode aborted early";
-    iTotal++;
-    H263LOG(__LINE__, szTestName, szStart);
-    u16Out = 0xffff;
-    png.openFLASH((uint8_t *)octocat_8bpp, sizeof(octocat_8bpp), PNGDraw3);
-    png.setBuffer(NULL);
-    rc = png.decode(NULL, 0);
-    png.close();
-    if (rc == PNG_QUIT_EARLY) { // check transparnet pixel (0,0) to see if it matches the 32-bit BG color we asked for
-        iTotalPass++;
-        H263LOG(__LINE__, szTestName, " - PASSED");
-    } else {
-        iTotalFail++;
-        H263LOG(__LINE__, szTestName, " - FAILED");
-    }
-
     // FUZZ testing
     // Randomize the input data (file header and compressed data) and confirm that the library returns an error code
     // and doesn't have an invalid pointer exception
@@ -507,7 +487,7 @@ int main(int argc, const char * argv[]) {
     iTotalPass++;
     
     free(pFuzzData);
-#endif // FUTURE
+#endif
     printf("Total tests: %d, %d passed, %d failed\n", iTotal, iTotalPass, iTotalFail);
     return 0;
 } /* main() */

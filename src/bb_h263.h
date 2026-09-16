@@ -128,7 +128,8 @@ enum {
     H263_INVALID_PARAMETER,
     H263_INVALID_FILE,
     H263_LAST_FRAME,
-    H263_NO_FRAMEBUFFER
+    H263_NO_FRAMEBUFFER,
+    H263_VIDEO_ENDED
 };
 
 // Audio codecs
@@ -374,6 +375,7 @@ class BB_H263
     void freeFramebuffer(void);
     void close(void);
     int getWidth() {return _h263.iWidth;}
+    int getFiletype() {return _h263.u8FileType;}
     int getCurrentFrame() {return _h263.iCurrentFrame;}
     int getHeight() {return _h263.iHeight;}
     int getFrameCount() {return _h263.iFrameTotal;}
@@ -658,7 +660,7 @@ int H263_decodeFrame(H263STATE *pH263, int xoff, int yoff)
     int rc = H263_SUCCESS;
     
     if (!pH263) return H263_INVALID_PARAMETER;
-    if (pH263->iCurrentFrame >= pH263->iFrameTotal) return H263_INVALID_PARAMETER;
+    if (pH263->iCurrentFrame >= pH263->iFrameTotal) return H263_VIDEO_ENDED;
     if (pH263->pFramebuffer == nullptr) return H263_NO_FRAMEBUFFER;
     
     pH263->iXOffset = xoff;
