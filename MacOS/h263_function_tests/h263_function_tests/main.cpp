@@ -236,6 +236,7 @@ uint8_t *p;
     p = (uint8_t *)malloc(iSize);
     fread(p, 1, iSize, f);
     fclose(f);
+    *pSize = iSize;
     return p;
 } /* LoadFile() */
 //
@@ -328,7 +329,7 @@ int main(int argc, const char * argv[]) {
             iTotalPass++;
             H263LOG(__LINE__, szTestName, " - PASSED");
         } else {
-            printf("frame count = %d\n", h263.getCurrentFrame());
+//            printf("frame count = %d\n", h263.getCurrentFrame());
             iTotalFail++;
             H263LOG(__LINE__, szTestName, " - FAILED");
         }
@@ -447,12 +448,12 @@ int main(int argc, const char * argv[]) {
     rc = h263.open("../../../sample_videos/homer_car_h263.avi");
     if (rc == H263_SUCCESS) {
         rc = h263.allocFramebuffer();
-        printf("count = %d\n", h263.getFrameCount());
+//        printf("count = %d\n", h263.getFrameCount());
         for (i=0; i<h263.getFrameCount() && rc == H263_SUCCESS; i++) {
             rc = h263.decodeFrame();
         }
-        printf("i=%d\n", i);
-        if (rc == H263_SUCCESS && h263.decodeFrame() == H263_VIDEO_ENDED) {
+//        printf("i=%d\n", i);
+        if (i == h263.getFrameCount() && rc == H263_LAST_FRAME) {
             iTotalPass++;
             H263LOG(__LINE__, szTestName, " - PASSED");
         } else {
@@ -475,7 +476,24 @@ int main(int argc, const char * argv[]) {
     if (pFileData) {
         pFuzzData = (uint8_t *)malloc(iFileSize);
         H263LOG(__LINE__, szTestName, szStart);
-        for (i=0; i<iFileSize; i++) { // corrupt each byte one at a time by inverting it
+        // Since the file is quite large and going through all 17MB would take a looong time, we can safely
+        // try to corrupt the header and first frame, followed by the indices at the end of the file
+        for (i=0; i<32768; i++) { // corrupt each byte one at a time by inverting it
+            if (i == 40) {
+                i |= 0;
+            }
+            memcpy(pFuzzData, pFileData, iFileSize); // start with the valid data
+            pFuzzData[i] = ~pFuzzData[i]; // invert the bits of this byte
+            if (h263.open(pFuzzData, iFileSize) == H263_SUCCESS) { // the header may be rejected
+                rc = h263.allocFramebuffer();
+                if (rc == H263_SUCCESS) {
+                    rc = h263.decodeFrame(); // try to decode the first frame
+                    h263.freeFramebuffer();
+                }
+                h263.close();
+            }
+        } // for each test
+        for (i=iFileSize - 32768; i<iFileSize; i++) { // corrupt each byte one at a time by inverting it
             memcpy(pFuzzData, pFileData, iFileSize); // start with the valid data
             pFuzzData[i] = ~pFuzzData[i]; // invert the bits of this byte
             if (h263.open(pFuzzData, iFileSize) == H263_SUCCESS) { // the header may be rejected
@@ -489,25 +507,28 @@ int main(int argc, const char * argv[]) {
         } // for each test
         H263LOG(__LINE__, szTestName, " - PASSED");
         iTotalPass++;
-#ifdef FUTURE
         // Fuzz test part 2 - multi-byte random corruption
         szTestName = (char *)"Multi-Byte Random Corruption Test";
         iTotal++;
         H263LOG(__LINE__, szTestName, szStart);
         for (i=0; i<1000; i++) { // 1000 iterations of random spots in the file to corrupt with random values
             int iOffset;
-            memcpy(pFuzzData, octocat_8bpp, sizeof(octocat_8bpp)); // start with the valid data
-            iOffset = rand() % sizeof(octocat_8bpp);
+            memcpy(pFuzzData, pFileData, iFileSize); // start with the valid data
+            iOffset = rand() % iFileSize;
             pFuzzData[iOffset] = (uint8_t)rand();
-            iOffset = rand() % sizeof(octocat_8bpp); // corrupt 2 spots just for good measure
+            iOffset = rand() % iFileSize; // corrupt 2 spots just for good measure
             pFuzzData[iOffset] = (uint8_t)rand();
-            if (png.openFLASH(pFuzzData, sizeof(octocat_8bpp), PNGDraw) == H263_SUCCESS) { // the PNG header may be rejected
-                png.decode(NULL, 0);
+            if (h263.open(pFuzzData, iFileSize) == H263_SUCCESS) { // the header may be rejected
+                rc = h263.allocFramebuffer();
+                if (rc == H263_SUCCESS) {
+                    rc = h263.decodeFrame(); // try to decode the first frame
+                    h263.freeFramebuffer();
+                }
+                h263.close();
             }
         } // for each test
         H263LOG(__LINE__, szTestName, " - PASSED");
         iTotalPass++;
-#endif
         free(pFuzzData);
         free(pFileData);
     } else {

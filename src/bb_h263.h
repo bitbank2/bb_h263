@@ -456,6 +456,7 @@ int BB_H263::openInternal(void)
     _h263.pFramebuffer = nullptr;
     _h263.iCurrentFrame = 0;
     _h263.iFrameCX = 0;
+    _h263.clipRect.w = 0;
     if (_h263.H263File.pData) {
         s = _h263.H263File.pData;
     } else {
@@ -465,7 +466,7 @@ int BB_H263::openInternal(void)
     }
     u32 = *(uint32_t *)&s[4]; // file size
     
-    if (MOTOLONG(s) == 0x52494646 /* RIFF */ &&  u32 == (iDataSize-8) && MOTOLONG(&s[8]) == 0x41564920 /* AVI */) {
+    if (MOTOLONG(s) == 0x52494646 /* RIFF */ && (u32 == iDataSize || u32 == (iDataSize-8)) && MOTOLONG(&s[8]) == 0x41564920 /* AVI */) {
         _h263.u8FileType = H263_FILE_AVI;
     }
     if (MOTOLONG(&s[4]) == 0x736b6970 /*'skip'*/ || MOTOLONG(&s[4]) == 0x66747970 /*'ftyp'*/ ||
@@ -721,7 +722,10 @@ int H263_decodeFrame(H263STATE *pH263, int xoff, int yoff)
         //printf("len = %d\n", pH263->pFrameLengths[pH263->iCurrentFrame]);
         (*pH263->pfnRead)(&pH263->H263File, s, pH263->pFrameLengths[pH263->iCurrentFrame]); // read the compressed frame
         if (pH263->u8FileType == H263_FILE_AVI) {
-            if (MOTOLONG(s) != 0x30306463 /* 00dc */) { // frame data
+            if (MOTOLONG(&s[4]) == 0x30306463) { // some 4-byte prefix (e.g. 'movi') ahead of the data
+                iOffset += 4;
+            }
+            if (MOTOLONG(&s[iOffset]) != 0x30306463 /* 00dc */) { // frame data
                 rc = H263_DECODE_ERROR;
                 goto decode_exit;
             }
@@ -737,6 +741,7 @@ int H263_decodeFrame(H263STATE *pH263, int xoff, int yoff)
                 rc = H263_DECODE_ERROR; // something went wrong
                 goto decode_exit;
             }
+            s += iOffset; // point to the compressed frame data
         } else {
             u32ChunkLen = MOTOLONG(&s[iOffset]) & 0xffffff;
 //            iOffset += 4;
@@ -2017,6 +2022,10 @@ uint8_t *pTables;
     } else {
         iTrueWidth = iH263Formats[cSourceFormat*2];
         iTrueHeight = iH263Formats[cSourceFormat*2+1];
+    }
+    if (iTrueWidth == 0 || iTrueHeight == 0 || (iTrueWidth<<4) != pVideo->iWidth || (iTrueHeight<<4) != pVideo->iHeight) {
+        pVideo->iLastError = H263_DECODE_ERROR;
+        return H263_DECODE_ERROR; // something went wrong
     }
     if (pVideo->iFrameCX == 0) { // need to allocate predictor pages
         x = pVideo->iFrameCX = iTrueWidth<<4;

@@ -129,7 +129,9 @@ int iHeaderSize;
 
 int main(int argc, const char * argv[]) {
     int rc, w, h, iFrame=0;
-    rc = h263.open("/Users/laurencebank/Downloads/matrix_h263.mov");
+//    rc = h263.open("/Users/laurencebank/Documents/Arduino/libraries/bb_h263/sample_videos/homer_car_h263.avi");
+      rc = h263.open("/Users/laurencebank/Downloads/out.avi");
+//    rc = h263.open("/Users/laurencebank/Downloads/matrix_h263.mov");
     //    rc = h263.open("/Users/laurencebank/Downloads/homer_car_h263.mov");
  //   rc = h263.open("/Users/laurencebank/Downloads/homer_h263_320x180.mov");
     if (rc == H263_SUCCESS) {
@@ -144,7 +146,7 @@ int main(int argc, const char * argv[]) {
         h263.allocFramebuffer();
         while (rc == H263_SUCCESS) {
             rc = h263.decodeFrame();
-//            printf("Frame %d of %d\n", iFrame, h263.getFrameCount());
+            printf("Frame %d of %d\n", iFrame, h263.getFrameCount());
 //            if (iFrame == 20) {
 //                WriteBMP("/Users/laurencebank/Downloads/h263.bmp", h263.getFramebuffer(), NULL, 320, 240, 16);
 //            }
