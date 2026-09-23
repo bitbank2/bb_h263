@@ -449,7 +449,7 @@ int BB_H263::openInternal(void)
     uint32_t u32, u32VideoType = 0;
     int i, iLen; //, iOffset;
     int j, iFrame, iAudio;
-    uint32_t u32Len, u32MaxLen, iDataSize = 0;
+    uint32_t u32MaxLen, iDataSize = 0;
 
     iDataSize = _h263.H263File.iSize;
     _h263.u8FileType = H263_FILE_INVALID;
@@ -519,11 +519,7 @@ int BB_H263::openInternal(void)
                     if (s[(j * 16) + 4] == 0x10) { // key frame?
                         u32 |= 0x80000000; // mark the high bit
                     }
-                    u32Len = *(uint32_t *)&s[(j * 16) + 12];
-                    u32Len += 8; // plus chunk header
-                    _h263.pFrameLengths[iFrame] = u32Len; // AVI marker+chunk length is stored ahead of the actual data
                     _h263.pFrameList[iFrame++] = u32;
-                    if (u32Len > u32MaxLen) u32MaxLen = u32Len;
                 } else if (s[j*16 + 2] == 'w' && _h263.pAudioList) { // audio
                     _h263.pAudioList[iAudio++] = u32;
                 }
@@ -544,6 +540,16 @@ int BB_H263::openInternal(void)
             } // for j
         }
     } // for i
+    if (_h263.u8FileType == H263_FILE_AVI) {    // The index list just contains offsets; now calculate the lengths from those offsets
+        for (i=0; i<_h263.iFrameTotal-1; i++) {
+            j = _h263.pFrameList[i+1] & 0x7fffffff;
+            j -= (_h263.pFrameList[i] & 0x7fffffff);
+            _h263.pFrameLengths[i] = (uint32_t)j;
+            if (j > u32MaxLen) u32MaxLen = j;
+        } // for i
+        j = _h263.iFileLen - (_h263.pFrameList[_h263.iFrameTotal-1] & 0x7fffffff);
+        if (j > u32MaxLen) u32MaxLen = j;
+    }
     if (_h263.u8FileType == H263_FILE_QT) { // Get the frame lengths (separate atom)
         uint32_t iFrameOff = _h263.iMovie; // in case no frame offsets in file
         if (_h263.H263File.fHandle) {
@@ -663,7 +669,9 @@ int H263_decodeFrame(H263STATE *pH263, int xoff, int yoff)
     if (!pH263) return H263_INVALID_PARAMETER;
     if (pH263->iCurrentFrame >= pH263->iFrameTotal) return H263_VIDEO_ENDED;
     if (pH263->pFramebuffer == nullptr) return H263_NO_FRAMEBUFFER;
-    
+    if (pH263->pFrameLengths[pH263->iCurrentFrame] <= 8) {
+        goto decode_exit;
+    }
     pH263->iXOffset = xoff;
     pH263->iYOffset = yoff;
     if (pH263->H263File.pData) { // reading directly from memory
@@ -1071,14 +1079,25 @@ void H263Close(H263STATE *pVideo)
     (*pVideo->pfnClose)(pVideo->H263File.fHandle);
 } /* H263Close() */
 
-const uint8_t cZigZag2[64] = {0,1,8,16,9,2,3,10,
+const uint8_t cZigZag2[128] = {
+    0,1,8,16,9,2,3,10,
     17,24,32,25,18,11,4,5,
     12,19,26,33,40,48,41,34,
     27,20,13,6,7,14,21,28,
     35,42,49,56,57,50,43,36,
     29,22,15,23,30,37,44,51,
     58,59,52,45,38,31,39,46,
-    53,60,61,54,47,55,62,63};
+    53,60,61,54,47,55,62,63,
+// Leave extra space for invalid decoding
+    0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,
+};
 
 // Frame size in Macroblocks of the different video formats
 const int iH263Formats[16] = {0,0, 8,6, 11,9, 22,18, 44,36, 88,72, 0,0, 0,0};
@@ -1793,49 +1812,55 @@ const int iFrameDelta = pVideo->iFrameCX>>2;
 
 void PrepVideoStruct(H263STATE *pVideo)
 {
-int i, j;
-
-   pVideo->usYUVRGB = (uint16_t *)MALLOC(0x20000);
+int i, j, k;
+int32_t cY, cU, cV;
+int Y, iCBB, iCBG, iCRG, iCRR;
+uint16_t iPixel, r, g, b, *d;
+    
+   d = pVideo->usYUVRGB = (uint16_t *)MALLOC(0x20000);
    pVideo->iCurrentFrame = 0;
    pVideo->iFRefFrame = -1;
     
        // prepare the color conversion table
-       for (i=0; i<65536; i++) {
-               int32_t cY, cU, cV;
-          int Y, iPixel, iCBB, iCBG, iCRG, iCRR;
-          cY = (unsigned char)((i & 0x3f)<<2); // lower 6 bits = Y
-          cU = (unsigned char)((i & 0x7c0)>>3); // next 5 bits = U
-          cV = (unsigned char)((i & 0xf800)>>8); // next 5 bits = V
-    //      cY += 128;
-          cY -= 16;
-          cU -= 128;
-          cV -= 128;
-          Y = cY * 76309;
-          iCBB = cU * 132201;
-          iCBG = cU * 25675;
-          iCRG = cV * 53279;
-          iCRR = cV * 104597;
-          j = ((iCBB + Y) >> 16); // blue
-          j &= 0x3ff;
-          if (j > 255 && j < 512) j = 255;
-          if (j >= 512) j = 0;
-          iPixel = j >> 3; // lower 5 bits = blue
-          j = ((Y - iCBG - iCRG) >> 16); // green
-          j &= 0x3ff;
-          if (j > 255 && j < 512) j = 255;
-              if (j >= 512) j = 0;
-              iPixel |= ((j >> 2) <<5); // middle 6 bits = green
-              j = ((iCRR + Y) >> 16); // red
-              j &= 0x3ff;
-              if (j > 255 && j < 512) j = 255;
-              if (j >= 512) j = 0;
-              iPixel |= ((j >> 3) << 11); // upper 5 bits = red
-              if (pVideo->u8PixelType == H263_PIXEL_RGB565_LE) {
-                  pVideo->usYUVRGB[i] = (uint16_t)iPixel;
-              } else { // big endian RGB565
-                  pVideo->usYUVRGB[i] = __builtin_bswap16((uint16_t)iPixel);
-              }
+       for (i=0; i<0x40; i++) { // Y value
+           cY = (unsigned char)(i << 2); // lower 6 bits = Y
+           cY -= 16;
+           Y = cY * 76309;
+           for (j=0; j<0x20; j++) { // U value
+               cU = (unsigned char)(j << 3); // next 5 bits = U
+               cU -= 128;
+               iCBB = cU * 132201;
+               iCBG = cU * 25675;
+               b = ((iCBB + Y) >> 16); // blue
+               b &= 0x3ff;
+               if (b > 255 && b < 512) b = 255;
+               else if (b >= 512) b = 0;
+               for (k=0; k<0x20; k++) { // V value
+                   iPixel = b >> 3; // lower 5 bits = blue
+                   cV = (unsigned char)(k << 3); // next 5 bits = V
+                   cV -= 128;
+                   iCRG = cV * 53279;
+                   iCRR = cV * 104597;
+                   g = ((Y - iCBG - iCRG) >> 16); // green
+                   g &= 0x3ff;
+                   if (g > 255 && g < 512) g = 255;
+                   else if (g >= 512) g = 0;
+                   iPixel |= ((g >> 2) <<5); // middle 6 bits = green
+                   r = ((iCRR + Y) >> 16); // red
+                   r &= 0x3ff;
+                   if (r > 255 && r < 512) r = 255;
+                   else if (r >= 512) r = 0;
+                   iPixel |= ((r >> 3) << 11); // upper 5 bits = red
+                   d[i | (j << 6) | (k << 11)] = iPixel;
+               } // for k
+           } // for j
         } // for i
+    // Need to flip to big endian? (faster as a continuous loop here)
+    if (pVideo->u8PixelType == H263_PIXEL_RGB565_BE) {
+        for (i=0; i<65536; i++) {
+            d[i] = __builtin_bswap16(d[i]);
+        }
+    }
 } /* PrepVideoStruct() */
 
 void H263SwapFrames(H263STATE *pVideo)
@@ -2031,12 +2056,12 @@ uint8_t *pTables;
         x = pVideo->iFrameCX = iTrueWidth<<4;
         y = pVideo->iFrameCY = iTrueHeight<<4;
         pVideo->MCUs = (int16_t *)MALLOC_ALIGNED(6*DCTSIZE2*sizeof(uint16_t));
-        pVideo->pBRef[0] = (int16_t *) MALLOC_ALIGNED(x * y * sizeof(int16_t)); // Luma prediction
-        pVideo->pBRef[1] = (int16_t *) MALLOC_ALIGNED(((x * y) >> 2)*sizeof(int16_t)); // Chroma1 prediction
-        pVideo->pBRef[2] = (int16_t *) MALLOC_ALIGNED(((x * y) >> 2)*sizeof(int16_t)); // Chroma2 prediction
-        pVideo->pFRef[0] = (int16_t *) MALLOC_ALIGNED(x * y * sizeof(int16_t)); // Luma prediction
-        pVideo->pFRef[1] = (int16_t *) MALLOC_ALIGNED(((x * y) >> 2)*sizeof(int16_t)); // Chroma1 prediction
-        pVideo->pFRef[2] = (int16_t *) MALLOC_ALIGNED(((x * y) >> 2)*sizeof(int16_t)); // Chroma2 prediction
+        pVideo->pBRef[0] = (int16_t *) MALLOC_ALIGNED(x * (y+16) * sizeof(int16_t)); // Luma prediction
+        pVideo->pBRef[1] = (int16_t *) MALLOC_ALIGNED(((x * (y+16)) >> 2)*sizeof(int16_t)); // Chroma1 prediction
+        pVideo->pBRef[2] = (int16_t *) MALLOC_ALIGNED(((x * (y+16)) >> 2)*sizeof(int16_t)); // Chroma2 prediction
+        pVideo->pFRef[0] = (int16_t *) MALLOC_ALIGNED(x * (y+16) * sizeof(int16_t)); // Luma prediction
+        pVideo->pFRef[1] = (int16_t *) MALLOC_ALIGNED(((x * (y+16)) >> 2)*sizeof(int16_t)); // Chroma1 prediction
+        pVideo->pFRef[2] = (int16_t *) MALLOC_ALIGNED(((x * (y+16)) >> 2)*sizeof(int16_t)); // Chroma2 prediction
     }
    iMBMax = iTrueWidth * iTrueHeight;
    cQuant = (uint8_t)(ulBits >> (27-iBit)) & 0x1f; // get PQUANT (5-bits)

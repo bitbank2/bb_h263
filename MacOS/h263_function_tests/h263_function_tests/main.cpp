@@ -250,7 +250,7 @@ void H263LOG(int line, char *string, const char *result)
 int main(int argc, const char * argv[]) {
     int i, rc, w, h, bpp, iTotal;
     uint8_t *pCompare;
-    uint8_t *pFuzzData, *pFileData;
+    uint8_t *pFuzzData;
     char *szTestName;
     int iFrames, iTotalPass, iTotalFail;
     int iFileSize;
@@ -360,6 +360,14 @@ int main(int argc, const char * argv[]) {
                 H263LOG(__LINE__, szTestName, " - PASSED");
             } else {
                 iTotalFail++;
+//                uint8_t *s, *d;
+//                s = pCompare;
+//                d = h263.getFramebuffer();
+//                for (i=0; i<h*w*2; i++) {
+//                    if (s[i] != d[i]) {
+//                        printf("difference found at offset %d, original: 0x%02x incorrect: 0x%02x\n", i, s[i], d[i]);
+//                    }
+//                }
                 H263LOG(__LINE__, szTestName, " - FAILED");
             }
         } else {
@@ -445,7 +453,7 @@ int main(int argc, const char * argv[]) {
     iTotal++;
     szTestName = (char *)"Decoding past end of file";
     H263LOG(__LINE__, szTestName, szStart);
-    rc = h263.open("../../../sample_videos/homer_car_h263.avi");
+    rc = h263.open("../../../sample_videos/matrix_h263.mov");
     if (rc == H263_SUCCESS) {
         rc = h263.allocFramebuffer();
 //        printf("count = %d\n", h263.getFrameCount());
@@ -472,17 +480,13 @@ int main(int argc, const char * argv[]) {
     printf("Begin fuzz testing...\n");
     szTestName = (char *)"Single Byte Sequential Corruption Test";
     iTotal++;
-    pFileData = LoadFile("../../../sample_videos/matrix_h263.mov", &iFileSize);
-    if (pFileData) {
-        pFuzzData = (uint8_t *)malloc(iFileSize);
+    pFuzzData = LoadFile("../../../sample_videos/matrix_h263.mov", &iFileSize);
+    if (pFuzzData) {
         H263LOG(__LINE__, szTestName, szStart);
         // Since the file is quite large and going through all 17MB would take a looong time, we can safely
-        // try to corrupt the header and first frame, followed by the indices at the end of the file
+        // try to corrupt the header and first frame, followed by the indices at the end of the file.
         for (i=0; i<32768; i++) { // corrupt each byte one at a time by inverting it
-            if (i == 40) {
-                i |= 0;
-            }
-            memcpy(pFuzzData, pFileData, iFileSize); // start with the valid data
+            uint8_t c = pFuzzData[i]; // keep copy of the byte we changed
             pFuzzData[i] = ~pFuzzData[i]; // invert the bits of this byte
             if (h263.open(pFuzzData, iFileSize) == H263_SUCCESS) { // the header may be rejected
                 rc = h263.allocFramebuffer();
@@ -492,9 +496,10 @@ int main(int argc, const char * argv[]) {
                 }
                 h263.close();
             }
+            pFuzzData[i] = c; // restore the byte we changed
         } // for each test
         for (i=iFileSize - 32768; i<iFileSize; i++) { // corrupt each byte one at a time by inverting it
-            memcpy(pFuzzData, pFileData, iFileSize); // start with the valid data
+            uint8_t c = pFuzzData[i];
             pFuzzData[i] = ~pFuzzData[i]; // invert the bits of this byte
             if (h263.open(pFuzzData, iFileSize) == H263_SUCCESS) { // the header may be rejected
                 rc = h263.allocFramebuffer();
@@ -504,6 +509,7 @@ int main(int argc, const char * argv[]) {
                 }
                 h263.close();
             }
+            pFuzzData[i] = c; // restore byte we changed
         } // for each test
         H263LOG(__LINE__, szTestName, " - PASSED");
         iTotalPass++;
@@ -512,12 +518,14 @@ int main(int argc, const char * argv[]) {
         iTotal++;
         H263LOG(__LINE__, szTestName, szStart);
         for (i=0; i<1000; i++) { // 1000 iterations of random spots in the file to corrupt with random values
-            int iOffset;
-            memcpy(pFuzzData, pFileData, iFileSize); // start with the valid data
-            iOffset = rand() % iFileSize;
-            pFuzzData[iOffset] = (uint8_t)rand();
-            iOffset = rand() % iFileSize; // corrupt 2 spots just for good measure
-            pFuzzData[iOffset] = (uint8_t)rand();
+            int iOffset1, iOffset2;
+            uint8_t a, b;
+            iOffset1 = rand() % iFileSize;
+            a = pFuzzData[iOffset1]; // save old byte
+            pFuzzData[iOffset1] = (uint8_t)rand();
+            iOffset2 = rand() % iFileSize; // corrupt 2 spots just for good measure
+            b = pFuzzData[iOffset2];
+            pFuzzData[iOffset2] = (uint8_t)rand();
             if (h263.open(pFuzzData, iFileSize) == H263_SUCCESS) { // the header may be rejected
                 rc = h263.allocFramebuffer();
                 if (rc == H263_SUCCESS) {
@@ -526,11 +534,12 @@ int main(int argc, const char * argv[]) {
                 }
                 h263.close();
             }
+            pFuzzData[iOffset1] = a; // restore the 2 bytes we changed
+            pFuzzData[iOffset2] = b;
         } // for each test
         H263LOG(__LINE__, szTestName, " - PASSED");
         iTotalPass++;
         free(pFuzzData);
-        free(pFileData);
     } else {
         printf("Error opening file for fuzz testing\n");
     }
