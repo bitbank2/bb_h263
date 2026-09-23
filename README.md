@@ -15,3 +15,6 @@ The focus of the project is for video and animation playback; the current versio
 
 ### How are the frames generated?
 The user can ask the library to allocate or provide a pointer to a RGB565 framebuffer. Each call to decodeFrame() updates the changing pixels in that framebuffer.<br>
+
+### Getting started
+First, consult the Wiki to get a feel for the API, then have a look at the examples for Arduino (ESP32) and Linux.<br>
