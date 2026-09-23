@@ -1,10 +1,12 @@
 bb_h263 Linux instructions
 --------------------------
-For Linux, the bb_h263 library gets built as a static C++ library.
+For Linux, the bb_h263 library is used as a self-contained, single .H file.
+Run the install.sh shell script to copy it to /usr/local/include so that
+it's visible to all of your projects.
 
-Compile the library by running make from the command line. The include file and binary will be copied to the directories where they can be accessed by all.
+./install.sh
 
-Next, compile and run the sample program like so:
->make -f make_sample
->sudo ./sample
+After copying the bb_h263.h file, you can try running the example projects
+in the examples folder. Each project has its own make file, so simply type
+'make' to build them.
 
